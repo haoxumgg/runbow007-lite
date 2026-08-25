@@ -52,7 +52,7 @@ tms:
 
 feishu:
   # 自建应用 App ID。Linux 通过 RUNBOW007_FEISHU_APP_SECRET 提供密钥。
-  app_id: ""
+  app_id: "cli_aaf95da631385d01"
   chat_id: oc_f79000009c4f09cbdf78b55fd35ae04a
   # 可选：留空时只发普通群消息；填写 open_id/user_id 后才会真正 @。
   mention_user_id: ""
@@ -72,8 +72,8 @@ web:
   password_hash: ""
   session_timeout_minutes: 480
   max_upload_mb: 32
-  # 上传页默认勾选的规则，与原来每小时任务一致；R2 是当天签收汇总，需要时再勾。
-  default_rules: [R1, R3, R4]
+  # 上传页默认执行全部提醒规则。
+  default_rules: [R1, R2, R3, R4]
   # 只有整站走 HTTPS 时才改成 true，否则浏览器会丢掉会话 Cookie。
   secure_cookie: false
 

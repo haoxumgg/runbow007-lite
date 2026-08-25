@@ -19,6 +19,7 @@ class WorkbookValidationError(ValueError):
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "order_no": ("订单号", "订单单号"),
+    "related_order_no": ("相关单号",),
     "organization": ("所属组织", "执行组织"),
     "carrier": ("承运商名称",),
     "departed_at": ("离厂时间(承运商提货时间)", "离厂时间"),
@@ -38,6 +39,7 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 REQUIRED_FIELDS = {
     "order_no",
+    "related_order_no",
     "departed_at",
     "wms_posted_at",
     "transport_status",
@@ -63,17 +65,17 @@ def read_orders(
     sheet_name, headers, rows = _read_rows(source)
     positions = _resolve_positions(headers)
     orders: list[Order] = []
-    seen: set[str] = set()
+    seen_order_nos: set[str] = set()
 
     for row_number, row in enumerate(rows, start=2):
         if not any(not _is_empty(value) for value in row):
             continue
         order = _to_order(row, row_number, positions)
-        if order.order_no in seen:
+        if order.order_no in seen_order_nos:
             raise WorkbookValidationError(
                 f"订单号重复: {order.order_no}（第 {row_number} 行）"
             )
-        seen.add(order.order_no)
+        seen_order_nos.add(order.order_no)
         orders.append(order)
 
     if not orders:
@@ -167,9 +169,13 @@ def _to_order(row: Sequence[Any], row_number: int, positions: dict[str, int | No
     order_no = _text(value("order_no"))
     if not order_no:
         raise WorkbookValidationError(f"第 {row_number} 行订单号为空")
+    related_order_no = _text(value("related_order_no"))
+    if not related_order_no:
+        raise WorkbookValidationError(f"第 {row_number} 行相关单号为空")
     departed_at = _datetime(value("departed_at"), "离厂时间", row_number)
     return Order(
         order_no=order_no,
+        related_order_no=related_order_no,
         organization=_text(value("organization")),
         carrier=_text(value("carrier")),
         departed_at=departed_at,

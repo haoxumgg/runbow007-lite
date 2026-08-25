@@ -152,7 +152,15 @@ def test_login_rejects_wrong_password_and_accepts_the_default_account(client):
     assert accepted["header_map"]["Location"] == "/upload"
     cookie = accepted["header_map"]["Set-Cookie"]
     assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
-    assert "上传 TMS 导出的 Excel" in client.request("GET", "/upload")["body"]
+    page = client.request("GET", "/upload")["body"]
+    assert "上传订单文件" in page
+    assert "演练模式" not in page
+    assert 'name="dry_run"' not in page
+    assert "直接推送飞书" in page
+    assert "确认并推送" in page
+    assert "window.confirm" in page
+    for code in ("R1", "R2", "R3", "R4"):
+        assert re.search(rf'name="rules" value="{code}" checked', page)
 
 
 def test_login_accepts_a_non_ascii_password(app_config):
@@ -201,7 +209,21 @@ def test_logout_clears_the_session(client):
     assert client.request("GET", "/upload")["header_map"]["Location"] == "/login"
 
 
-def test_upload_dry_run_parses_without_sending(client, workbook_bytes):
+def test_upload_ignores_the_removed_dry_run_field_and_still_sends(
+    client, workbook_bytes, monkeypatch
+):
+    sent = []
+
+    class FakeClient:
+        def __init__(self, config, *, app_secret):
+            pass
+
+        def send(self, message):
+            sent.append(message)
+            return "om_legacy_form"
+
+    monkeypatch.setattr("runbow007.pipeline.FeishuClient", FakeClient)
+    monkeypatch.setattr("runbow007.pipeline.get_feishu_secret", lambda app_id: "secret")
     client.login()
 
     response = client.upload(
@@ -211,8 +233,9 @@ def test_upload_dry_run_parses_without_sending(client, workbook_bytes):
     )
 
     assert response["status"].startswith("200")
-    assert _banner(response["body"]) == "演练完成，未发送飞书。"
-    assert "<td>3</td>" in response["body"]
+    assert len(sent) == 1
+    assert _banner(response["body"]) == "已推送飞书，本次提醒 3 项。"
+    assert 'data-metric="rows">3<' in response["body"]
     assert "R4 3" in response["body"]
 
 
@@ -241,9 +264,34 @@ def test_upload_sends_one_feishu_message_with_the_same_rules(
 
     repeated = client.upload(filename="hdrunbow-export.xlsx", payload=workbook_bytes)
 
-    # 去重与自动任务完全一致：同一批订单当天不会被重复推送。
-    assert len(sent) == 1
-    assert "没有需要新提醒的订单" in repeated["body"]
+    assert len(sent) == 2
+    assert "已推送飞书，本次提醒 3 项。" in repeated["body"]
+    for message in sent:
+        lines = [line[0]["text"] for line in message.content]
+        assert "此前已提醒" not in "\n".join(lines)
+        for order_no in ("D001", "D002", "D003"):
+            assert f"- 相关单号 {order_no}" in lines
+
+
+def test_upload_does_not_send_when_no_rule_matches(
+    client, tmp_path, make_order, write_orders_xlsx, monkeypatch
+):
+    source = write_orders_xlsx(
+        tmp_path / "no-match.xlsx",
+        [make_order(order_no="NO-R4", related_order_no="RELATED-NO-R4")],
+    )
+
+    class UnexpectedClient:
+        def __init__(self, config, *, app_secret):
+            raise AssertionError("没有规则命中时不应创建飞书客户端")
+
+    monkeypatch.setattr("runbow007.pipeline.FeishuClient", UnexpectedClient)
+    client.login()
+
+    response = client.upload(filename="no-match.xlsx", payload=source.read_bytes())
+
+    assert response["status"].startswith("200")
+    assert _banner(response["body"]) == "解析完成，没有符合条件的订单，未发送飞书。"
 
 
 def test_upload_rejects_a_stale_csrf_token(client, workbook_bytes):

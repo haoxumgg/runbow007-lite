@@ -9,6 +9,7 @@ from typing import Any
 @dataclass(frozen=True, slots=True)
 class Order:
     order_no: str
+    related_order_no: str
     organization: str
     carrier: str
     departed_at: datetime | None

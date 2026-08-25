@@ -119,8 +119,75 @@ def test_pipeline_reports_current_and_new_candidates_separately(
         "当前符合条件共 2 个订单；以下为本轮新增或到期重提醒的 1 个订单，"
         "另有 1 个此前已提醒。"
     ) in lines
-    assert "- D002" in lines
-    assert "- D001" not in lines
+    assert "- 相关单号 D002" in lines
+    assert "- 相关单号 D001" not in lines
+
+
+def test_pipeline_send_all_current_repeats_the_full_current_result(
+    tmp_path, app_config, make_order, write_orders_xlsx, monkeypatch
+):
+    source = write_orders_xlsx(
+        tmp_path / "orders.xlsx",
+        [
+            make_order(
+                order_no=f"INTERNAL-{index}",
+                related_order_no=f"RELATED-{index}",
+                is_delayed=True,
+                delay_reason=None,
+            )
+            for index in range(1, 4)
+        ],
+    )
+    sent_messages = []
+
+    class FakeClient:
+        def __init__(self, config, *, app_secret):
+            pass
+
+        def send(self, message):
+            sent_messages.append(message)
+            return f"om_{len(sent_messages)}"
+
+    monkeypatch.setattr("runbow007.pipeline.get_feishu_secret", lambda app_id: "secret")
+    monkeypatch.setattr("runbow007.pipeline.FeishuClient", FakeClient)
+    pipeline = Pipeline(app_config)
+
+    first = pipeline.process_file(
+        source, rule_codes=["R4"], send=True, send_all_current=True
+    )
+    second = pipeline.process_file(
+        source, rule_codes=["R4"], send=True, send_all_current=True
+    )
+
+    assert first.sent_count == second.sent_count == 3
+    assert len(sent_messages) == 2
+    for message in sent_messages:
+        lines = [line[0]["text"] for line in message.content]
+        assert "此前已提醒" not in "\n".join(lines)
+        for index in range(1, 4):
+            assert f"- 相关单号 RELATED-{index}" in lines
+
+
+def test_pipeline_send_all_current_does_not_send_an_empty_message(
+    tmp_path, app_config, make_order, write_orders_xlsx, monkeypatch
+):
+    source = write_orders_xlsx(
+        tmp_path / "no-match.xlsx",
+        [make_order(order_no="NO-R4", related_order_no="RELATED-NO-R4")],
+    )
+
+    class UnexpectedClient:
+        def __init__(self, config, *, app_secret):
+            raise AssertionError("没有规则命中时不应创建飞书客户端")
+
+    monkeypatch.setattr("runbow007.pipeline.FeishuClient", UnexpectedClient)
+
+    result = Pipeline(app_config).process_file(
+        source, rule_codes=["R4"], send=True, send_all_current=True
+    )
+
+    assert result.candidate_count == 0
+    assert result.sent_count == 0
 
 
 def test_pipeline_force_send_repeats_current_candidates_for_acceptance(
@@ -192,6 +259,13 @@ def test_pipeline_rejects_force_send_in_dry_run(app_config):
     with pytest.raises(ValueError, match="强制发送只能与真实发送同时启用"):
         Pipeline(app_config).process_file(
             "missing.xlsx", rule_codes=["R4"], send=False, force_send=True
+        )
+
+
+def test_pipeline_rejects_send_all_current_in_dry_run(app_config):
+    with pytest.raises(ValueError, match="全量发送只能与真实发送同时启用"):
+        Pipeline(app_config).process_file(
+            "missing.xlsx", rule_codes=["R4"], send_all_current=True
         )
 
 

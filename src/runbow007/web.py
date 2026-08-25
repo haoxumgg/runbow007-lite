@@ -39,10 +39,10 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "runbow007_session"
 ALL_RULES: tuple[str, ...] = ("R1", "R2", "R3", "R4")
 RULE_LABELS = {
-    "R1": "R1 WMS过账时效",
-    "R2": "R2 今日签收提醒",
-    "R3": "R3 合同签署异常",
-    "R4": "R4 延迟无原因",
+    "R1": "WMS 过账",
+    "R2": "今日签收",
+    "R3": "合同签署",
+    "R4": "延迟原因",
 }
 ALLOWED_SUFFIXES = (".xls", ".xlsx")
 # 上传页只是入口，真正的重活在解析和发送；等锁 3 秒足够区分"重复提交"和"空闲"。
@@ -250,44 +250,322 @@ def boundary_of(content_type: str) -> bytes:
 
 STYLE = """
 *, *::before, *::after { box-sizing: border-box; }
+:root {
+  color-scheme: light;
+  --page: #f4f7fb;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --text: #182230;
+  --muted: #667085;
+  --border: #e4e9f0;
+  --border-strong: #cfd7e3;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-soft: #eff6ff;
+  --focus: rgba(37, 99, 235, .2);
+  --danger: #b42318;
+  --danger-soft: #fef3f2;
+  --success: #067647;
+  --success-soft: #ecfdf3;
+  --warning: #b54708;
+  --warning-soft: #fffaeb;
+  --shadow: 0 18px 50px rgba(16, 24, 40, .08);
+}
 body {
-  margin: 0; padding: 32px 16px; min-height: 100vh;
-  font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
-  background: #f4f5f7; color: #1f2329; line-height: 1.6;
+  margin: 0;
+  min-height: 100vh;
+  padding: 28px 18px 48px;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  background:
+    radial-gradient(circle at 12% 0, rgba(37, 99, 235, .08), transparent 28rem),
+    var(--page);
+  color: var(--text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
-main { max-width: 720px; margin: 0 auto; }
-h1 { font-size: 20px; margin: 0; }
-h2 { font-size: 15px; margin: 0 0 12px; color: #646a73; font-weight: 600; }
-.card {
-  background: #fff; border: 1px solid #dee0e3; border-radius: 8px;
-  padding: 24px; margin-bottom: 16px;
+main { max-width: 860px; margin: 0 auto; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 6px; font-size: clamp(24px, 4vw, 30px); line-height: 1.2; }
+h2 { margin-bottom: 0; font-size: 17px; line-height: 1.35; }
+.card, .panel {
+  margin-bottom: 18px;
+  padding: 28px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid rgba(228, 233, 240, .9);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
 }
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.muted { color: #646a73; font-size: 13px; }
-label { display: block; font-size: 14px; margin-bottom: 6px; }
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+  padding: 0 4px;
+}
+.brand { display: inline-flex; align-items: center; gap: 11px; font-weight: 600; }
+.brand-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: -.02em;
+  background: #172033;
+  border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(23, 32, 51, .18);
+}
+.brand-name { letter-spacing: -.01em; }
+.user-nav { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; }
+.user-nav button.link { min-height: 40px; padding: 8px 0; }
+.muted, .field-hint, .safety-note { color: var(--muted); font-size: 13px; }
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 26px;
+}
+.eyebrow {
+  margin-bottom: 7px;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.destination {
+  display: flex;
+  max-width: 280px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--surface-subtle);
+  border-radius: 9px;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: #12b76a;
+  border-radius: 50%;
+}
+.destination code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+form { margin: 0; }
+.field { margin-bottom: 22px; }
+.field > label, legend {
+  display: block;
+  margin-bottom: 7px;
+  padding: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.field-hint { display: block; margin: -3px 0 9px; }
+fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 input[type=text], input[type=password], input[type=number], input[type=file] {
-  width: 100%; padding: 9px 12px; font-size: 14px; color: #1f2329;
-  border: 1px solid #c9cdd4; border-radius: 6px; background: #fff;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-.field { margin-bottom: 18px; }
-.checks { display: flex; flex-wrap: wrap; gap: 8px 20px; }
-.checks label { display: flex; align-items: center; gap: 6px; margin: 0; }
+input:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 4px var(--focus); }
+.file-field {
+  padding: 18px;
+  background: var(--surface-subtle);
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+}
+input[type=file] { min-height: 48px; padding: 5px; background: var(--surface); }
+input[type=file]::file-selector-button {
+  margin-right: 12px;
+  padding: 9px 13px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--surface-subtle);
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(180px, .75fr);
+  gap: 22px;
+}
+.checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.rule-option { position: relative; margin: 0; cursor: pointer; }
+.rule-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.rule-content {
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.rule-code { color: var(--text); font-size: 12px; font-weight: 600; }
+.rule-option input:checked + .rule-content {
+  color: #1d4ed8;
+  background: var(--primary-soft);
+  border-color: #93b4fa;
+}
+.rule-option input:focus-visible + .rule-content { box-shadow: 0 0 0 4px var(--focus); }
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 4px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.mode-option { display: flex; align-items: center; gap: 10px; margin: 0; cursor: pointer; }
+.mode-option input { width: 17px; height: 17px; margin: 0; accent-color: var(--primary); }
+.mode-copy { display: grid; gap: 1px; }
+.mode-title { font-size: 14px; font-weight: 600; }
+.mode-hint { color: var(--muted); font-size: 12px; }
 button {
-  padding: 10px 22px; font-size: 14px; font-weight: 600; color: #fff;
-  background: #1456f0; border: none; border-radius: 6px; cursor: pointer;
+  min-height: 42px;
+  padding: 10px 19px;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--primary);
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background .15s ease, transform .15s ease;
 }
-button:disabled { background: #94a7d4; cursor: progress; }
+button:hover { background: var(--primary-hover); }
+button:active { transform: translateY(1px); }
+button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+button:disabled { background: #94a3b8; cursor: progress; transform: none; }
 button.link {
-  background: none; color: #1456f0; padding: 0; font-weight: 400; font-size: 13px;
+  min-height: auto;
+  padding: 5px 0;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 400;
+  background: none;
 }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 8px 0; border-bottom: 1px solid #eff0f1; }
-th { width: 40%; color: #646a73; font-weight: 400; }
-.banner { padding: 12px 16px; border-radius: 6px; font-size: 14px; margin-bottom: 16px; }
-.error { background: #fdefee; color: #b4302e; border: 1px solid #f8c7c5; }
-.ok { background: #eaf6ec; color: #23694a; border: 1px solid #b7e0c3; }
-.warn { background: #fff6e8; color: #8a5a13; border: 1px solid #f5dcb0; }
+button.link:hover { color: var(--primary-hover); background: none; }
+.safety-note { margin: 12px 0 0; text-align: right; }
+.banner {
+  margin-bottom: 18px;
+  padding: 11px 13px;
+  font-size: 13px;
+  border-radius: 9px;
+}
+.error { color: var(--danger); background: var(--danger-soft); border: 1px solid #fecdca; }
+.ok { color: var(--success); background: var(--success-soft); border: 1px solid #abefc6; }
+.warn { color: var(--warning); background: var(--warning-soft); border: 1px solid #fedf89; }
+.result-panel { padding-bottom: 22px; }
+.result-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.result-title .muted { margin: 0; }
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 11px;
+}
+.metric { padding: 16px; background: var(--surface-subtle); }
+.metric-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+.metric-value { display: block; font-size: 23px; font-weight: 600; line-height: 1.2; }
+details { margin-top: 14px; color: var(--muted); font-size: 13px; }
+summary { width: fit-content; cursor: pointer; color: var(--primary); }
+.result-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 13px 0 0;
+}
+.result-details dt { color: var(--muted); }
+.result-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text); }
 code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.auth-shell { max-width: 420px; margin: 10vh auto 0; }
+.auth-brand { display: flex; justify-content: center; margin-bottom: 18px; }
+.auth-panel { padding: 32px; }
+.auth-heading { margin-bottom: 26px; text-align: center; }
+.auth-heading h1 { margin-bottom: 7px; }
+.auth-heading p { margin-bottom: 0; }
+.auth-panel button { width: 100%; margin-top: 2px; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 640px) {
+  body { padding: 18px 12px 32px; }
+  .card, .panel, .auth-panel { padding: 20px; border-radius: 13px; }
+  .app-header { margin-bottom: 16px; }
+  .user-nav > span { display: none; }
+  .section-heading { display: block; margin-bottom: 22px; }
+  .destination { max-width: 100%; margin-top: 14px; }
+  .form-grid { grid-template-columns: 1fr; gap: 0; }
+  .checks { grid-template-columns: 1fr; }
+  .action-bar { align-items: stretch; flex-direction: column; }
+  .action-bar button { width: 100%; }
+  .safety-note { text-align: left; }
+  .metrics { grid-template-columns: 1fr; }
+  input[type=text], input[type=password], input[type=number], input[type=file] {
+    font-size: 16px;
+  }
+  .metric {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 15px;
+  }
+  .metric-label { margin: 0; }
+  .metric-value { font-size: 20px; }
+  .auth-shell { margin-top: 5vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+}
 """
 
 
@@ -307,26 +585,35 @@ def _escape(value: object) -> str:
 
 
 def login_page(*, error: str, nonce: str) -> str:
-    banner = f'<div class="banner error">{_escape(error)}</div>' if error else ""
+    banner = (
+        f'<div role="alert" class="banner error">{_escape(error)}</div>' if error else ""
+    )
     body = f"""
-<div class="card">
-  <h1>runbow007 人工上传</h1>
-  <p class="muted">李宁 TMS 订单提醒兜底入口，登录后上传导出的 Excel。</p>
-</div>
-<div class="card">
-  {banner}
-  <form method="post" action="/login">
-    <div class="field">
-      <label for="username">账号</label>
-      <input type="text" id="username" name="username" autocomplete="username" required>
+<div class="auth-shell">
+  <div class="auth-brand">
+    <div class="brand">
+      <span class="brand-mark">007</span><span class="brand-name">runbow007</span>
     </div>
-    <div class="field">
-      <label for="password">密码</label>
-      <input type="password" id="password" name="password"
-             autocomplete="current-password" required>
+  </div>
+  <section class="panel auth-panel">
+    <div class="auth-heading">
+      <h1>欢迎回来</h1>
+      <p class="muted">登录订单提醒工作台</p>
     </div>
-    <button type="submit">登录</button>
-  </form>
+    {banner}
+    <form method="post" action="/login">
+      <div class="field">
+        <label for="username">账号</label>
+        <input type="text" id="username" name="username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">密码</label>
+        <input type="password" id="password" name="password"
+               autocomplete="current-password" required>
+      </div>
+      <button type="submit">进入工作台</button>
+    </form>
+  </section>
 </div>
 """
     return render_page("登录 · runbow007", body, nonce)
@@ -336,7 +623,6 @@ def login_page(*, error: str, nonce: str) -> str:
 class FormState:
     rules: tuple[str, ...]
     ui_total: str = ""
-    dry_run: bool = False
 
 
 @dataclass(slots=True)
@@ -352,64 +638,93 @@ class UploadView:
 
 def upload_page(view: UploadView, nonce: str) -> str:
     rule_inputs = "".join(
-        '<label><input type="checkbox" name="rules" value="{code}"{checked}>{label}</label>'.format(
+        (
+            '<label class="rule-option">'
+            '<input type="checkbox" name="rules" value="{code}"{checked}>'
+            '<span class="rule-content"><span class="rule-code">{code}</span>{label}</span>'
+            "</label>"
+        ).format(
             code=code,
             label=_escape(RULE_LABELS[code]),
             checked=" checked" if code in view.form.rules else "",
         )
         for code in ALL_RULES
     )
-    banner = f'<div class="banner error">{_escape(view.error)}</div>' if view.error else ""
+    banner = (
+        f'<div role="alert" class="banner error">{_escape(view.error)}</div>'
+        if view.error
+        else ""
+    )
     body = f"""
-<div class="card topbar">
-  <div>
-    <h1>runbow007 人工上传</h1>
-    <p class="muted">
-      当前登录：{_escape(view.username)}　·　飞书群：<code>{_escape(view.chat_id)}</code>
-    </p>
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-mark">007</span><span class="brand-name">订单提醒</span>
   </div>
-  <form method="post" action="/logout">
+  <div class="user-nav">
+    <span>{_escape(view.username)}</span>
+    <form method="post" action="/logout">
     <input type="hidden" name="csrf_token" value="{_escape(view.csrf_token)}">
-    <button class="link" type="submit">退出登录</button>
-  </form>
-</div>
+      <button class="link" type="submit">退出</button>
+    </form>
+  </div>
+</header>
 {view.result}
-<div class="card">
-  <h2>上传 TMS 导出的 Excel</h2>
+<section class="panel">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">TMS Excel</p>
+      <h1>上传订单文件</h1>
+      <span class="muted">选择规则，确认后开始处理</span>
+    </div>
+    <div class="destination" aria-label="飞书目标群">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>飞书群</span>
+      <code title="{_escape(view.chat_id)}">{_escape(view.chat_id)}</code>
+    </div>
+  </div>
   {banner}
   <form method="post" action="/upload" enctype="multipart/form-data" id="upload-form">
     <input type="hidden" name="csrf_token" value="{_escape(view.csrf_token)}">
-    <div class="field">
-      <label for="file">Excel 文件（.xls / .xlsx，最大 {view.max_upload_mb} MB）</label>
-      <input type="file" id="file" name="file" accept=".xls,.xlsx" required>
+    <div class="field file-field">
+      <label for="file">Excel 文件</label>
+      <span class="field-hint" id="file-hint">.xls / .xlsx，最大 {view.max_upload_mb} MB</span>
+      <input type="file" id="file" name="file" accept=".xls,.xlsx"
+             aria-describedby="file-hint" required>
     </div>
-    <div class="field">
-      <label>执行规则</label>
-      <div class="checks">{rule_inputs}</div>
+    <div class="form-grid">
+      <fieldset class="field">
+        <legend>提醒规则</legend>
+        <div class="checks">{rule_inputs}</div>
+      </fieldset>
+      <div class="field">
+        <label for="ui_total">页面总条数</label>
+        <span class="field-hint" id="ui-total-hint">选填，用于完整性校验</span>
+        <input type="number" id="ui_total" name="ui_total" min="1"
+               value="{_escape(view.form.ui_total)}" placeholder="例如 4750"
+               aria-describedby="ui-total-hint">
+      </div>
     </div>
-    <div class="field">
-      <label for="ui_total">TMS 页面显示的总条数（可选，用于校验导出是否完整）</label>
-      <input type="number" id="ui_total" name="ui_total" min="1"
-             value="{_escape(view.form.ui_total)}" placeholder="例如 4750">
+    <div class="action-bar">
+      <span class="mode-copy">
+        <span class="mode-title">直接推送飞书</span>
+        <span class="mode-hint">发送本轮全部命中订单</span>
+      </span>
+      <button type="submit" id="submit-button">确认并推送</button>
     </div>
-    <div class="field checks">
-      <label>
-        <input type="checkbox" name="dry_run" value="1"{" checked" if view.form.dry_run else ""}>
-        只解析、不发送飞书（演练）
-      </label>
-    </div>
-    <button type="submit" id="submit-button">解析并推送飞书</button>
+    <p class="safety-note">每次上传都会发送全部当前命中项，不与历史提醒比较。</p>
   </form>
-  <p class="muted">
-    解析完成后立即推送到上面的飞书群。去重规则与自动任务一致：已经提醒过的订单
-    不会重复推送，所以命中数可能多于本次推送数。
-  </p>
-</div>
+</section>
 <script nonce="{nonce}">
-document.getElementById('upload-form').addEventListener('submit', function () {{
-  var button = document.getElementById('submit-button');
-  button.disabled = true;
-  button.textContent = '正在解析并推送，请勿关闭页面…';
+var uploadForm = document.getElementById('upload-form');
+var submitButton = document.getElementById('submit-button');
+uploadForm.addEventListener('submit', function (event) {{
+  if (!window.confirm('将把本轮全部命中订单发送到飞书群，确认继续？')) {{
+    event.preventDefault();
+    return;
+  }}
+  uploadForm.setAttribute('aria-busy', 'true');
+  submitButton.disabled = true;
+  submitButton.textContent = '正在解析并推送…';
 }});
 </script>
 """
@@ -420,31 +735,49 @@ def result_card(result: object, filename: str, finished_at: datetime) -> str:
     row_count = getattr(result, "row_count", 0)
     candidate_count = getattr(result, "candidate_count", 0)
     sent_count = getattr(result, "sent_count", 0)
-    dry_run = getattr(result, "dry_run", True)
     rule_counts: Iterable[tuple[str, int]] = getattr(result, "rule_counts", ())
-    if dry_run:
-        banner = '<div class="banner warn">演练完成，未发送飞书。</div>'
-    elif sent_count:
-        banner = f'<div class="banner ok">已推送飞书，本次提醒 {sent_count} 项。</div>'
+    if sent_count:
+        banner = (
+            f'<div role="status" class="banner ok">'
+            f"已推送飞书，本次提醒 {sent_count} 项。</div>"
+        )
     else:
         banner = (
-            '<div class="banner warn">解析完成，但没有需要新提醒的订单，'
-            "因此未发送飞书。</div>"
+            '<div role="status" class="banner warn">'
+            "解析完成，没有符合条件的订单，未发送飞书。</div>"
         )
     breakdown = "、".join(f"{code} {count}" for code, count in rule_counts) or "无"
     return f"""
-<div class="card">
-  <h2>最近一次上传结果</h2>
+<section class="panel result-panel" aria-live="polite">
+  <div class="result-title">
+    <h2>处理结果</h2>
+    <p class="muted">{_escape(finished_at.strftime("%m-%d %H:%M"))}</p>
+  </div>
   {banner}
-  <table>
-    <tr><th>文件</th><td>{_escape(filename)}</td></tr>
-    <tr><th>完成时间</th><td>{_escape(finished_at.strftime("%Y-%m-%d %H:%M:%S"))}</td></tr>
-    <tr><th>解析订单行数</th><td>{row_count}</td></tr>
-    <tr><th>规则命中数</th><td>{candidate_count}（{_escape(breakdown)}）</td></tr>
-    <tr><th>本次推送数</th><td>{sent_count}</td></tr>
-    <tr><th>运行编号</th><td><code>{_escape(getattr(result, "run_id", ""))}</code></td></tr>
-  </table>
-</div>
+  <div class="metrics">
+    <div class="metric">
+      <span class="metric-label">解析行数</span>
+      <strong class="metric-value" data-metric="rows">{row_count}</strong>
+    </div>
+    <div class="metric">
+      <span class="metric-label">规则命中</span>
+      <strong class="metric-value" data-metric="candidates">{candidate_count}</strong>
+    </div>
+    <div class="metric">
+      <span class="metric-label">本次推送</span>
+      <strong class="metric-value" data-metric="sent">{sent_count}</strong>
+    </div>
+  </div>
+  <details>
+    <summary>查看运行详情</summary>
+    <dl class="result-details">
+      <dt>文件</dt><dd>{_escape(filename)}</dd>
+      <dt>规则</dt><dd>{_escape(breakdown)}</dd>
+      <dt>完成时间</dt><dd>{_escape(finished_at.strftime("%Y-%m-%d %H:%M:%S"))}</dd>
+      <dt>运行编号</dt><dd><code>{_escape(getattr(result, "run_id", ""))}</code></dd>
+    </dl>
+  </details>
+</section>
 """
 
 
@@ -474,7 +807,7 @@ class WebApp:
         self.max_upload_bytes = self.web.max_upload_mb * 1024 * 1024
         self._default_rules = tuple(
             code for code in ALL_RULES if code in self.web.default_rules
-        ) or ("R1", "R3", "R4")
+        ) or ALL_RULES
 
     # -- WSGI 入口 ---------------------------------------------------------
 
@@ -626,9 +959,7 @@ class WebApp:
             part = fields.get(name)
             return part.text if part is not None else ""
 
-        form = FormState(
-            rules or self._default_rules, field_text("ui_total"), "dry_run" in fields
-        )
+        form = FormState(rules, field_text("ui_total"))
         csrf = field_text("csrf_token")
         if not _same_secret(csrf, session.csrf_token):
             logger.warning("上传请求缺少有效的 CSRF 令牌")
@@ -644,16 +975,15 @@ class WebApp:
             return self._upload_form(session, form=form, error=str(exc))
 
         logger.info(
-            "收到人工上传: 文件=%s 字节=%s 规则=%s 演练=%s 账号=%s",
+            "收到人工上传: 文件=%s 字节=%s 规则=%s 全量发送=True 账号=%s",
             filename,
             len(payload),
             ",".join(rules),
-            form.dry_run,
             session.username,
         )
         try:
             result = self._run_pipeline(
-                filename, payload, rules=rules, ui_total=ui_total, dry_run=form.dry_run
+                filename, payload, rules=rules, ui_total=ui_total
             )
         except portalocker.AlreadyLocked:
             return self._upload_form(
@@ -667,7 +997,7 @@ class WebApp:
         finished_at = datetime.now(ZoneInfo(self.config.runtime.timezone))
         return self._upload_form(
             session,
-            form=FormState(rules, form.ui_total, form.dry_run),
+            form=FormState(rules, form.ui_total),
             result=result_card(result, filename, finished_at),
         )
 
@@ -678,7 +1008,6 @@ class WebApp:
         *,
         rules: tuple[str, ...],
         ui_total: int | None,
-        dry_run: bool,
     ) -> object:
         upload_dir = self.config.runtime.data_dir / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
@@ -695,7 +1024,8 @@ class WebApp:
                     temporary_path,
                     rule_codes=rules,
                     expected_ui_total=ui_total,
-                    send=not dry_run,
+                    send=True,
+                    send_all_current=True,
                 )
         finally:
             temporary_path.unlink(missing_ok=True)

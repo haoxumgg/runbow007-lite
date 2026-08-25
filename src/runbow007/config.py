@@ -85,8 +85,8 @@ class WebConfig:
     password_hash: str = ""
     session_timeout_minutes: int = 480
     max_upload_mb: int = 32
-    # 上传页默认勾选的规则；与原来每小时任务一致，R2 需要时再手动勾选。
-    default_rules: tuple[str, ...] = ("R1", "R3", "R4")
+    # 上传页默认执行全部提醒规则。
+    default_rules: tuple[str, ...] = ("R1", "R2", "R3", "R4")
     # 只有整站走 HTTPS 时才打开，否则浏览器会直接丢掉会话 Cookie。
     secure_cookie: bool = False
 

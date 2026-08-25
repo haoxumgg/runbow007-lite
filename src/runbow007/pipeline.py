@@ -41,6 +41,7 @@ class Pipeline:
         send: bool = False,
         max_send_orders: int | None = None,
         force_send: bool = False,
+        send_all_current: bool = False,
     ) -> RunResult:
         now = datetime.now(ZoneInfo(self.config.runtime.timezone))
         requested = tuple(code.upper() for code in (rule_codes or self.config.rules.enabled))
@@ -53,6 +54,8 @@ class Pipeline:
         should_send = send
         if force_send and not should_send:
             raise ValueError("强制发送只能与真实发送同时启用")
+        if send_all_current and not should_send:
+            raise ValueError("全量发送只能与真实发送同时启用")
         if max_send_orders is not None:
             if not should_send:
                 raise ValueError("小批量发送限制必须与真实发送同时启用")
@@ -82,8 +85,11 @@ class Pipeline:
                 reopen_grace_hours=self.config.rules.reopen_grace_hours,
             )
             send_scope = _limit_unique_orders(candidates, max_send_orders)
-            if force_send:
-                logger.warning("人工验收强制发送已启用，本轮忽略历史发送去重记录")
+            if force_send or send_all_current:
+                if send_all_current:
+                    logger.info("本轮发送全部当前命中项，不应用历史提醒去重")
+                else:
+                    logger.warning("人工验收强制发送已启用，本轮忽略历史发送去重记录")
                 sendable = send_scope
             else:
                 sendable = [

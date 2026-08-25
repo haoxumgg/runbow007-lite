@@ -33,7 +33,11 @@ class FakeSession:
 
 
 def test_message_contains_real_mention_token(make_order):
-    order = make_order(departed_at=None)
+    order = make_order(
+        order_no="INTERNAL-R1",
+        related_order_no="RELATED-R1",
+        departed_at=None,
+    )
     candidate = RuleEngine(RulesConfig()).evaluate(
         [order], now=datetime(2026, 8, 6), rule_codes=["R1"]
     )[0]
@@ -41,7 +45,8 @@ def test_message_contains_real_mention_token(make_order):
         mention_user_id="ou_xuhao", mention_name="许昊"
     ).format("R1", [candidate])
     assert message.content[0][0] == {"tag": "at", "user_id": "ou_xuhao"}
-    assert order.order_no in message.content[-1][0]["text"]
+    assert order.related_order_no in message.content[-1][0]["text"]
+    assert order.order_no not in message.content[-1][0]["text"]
 
 
 def test_message_without_user_id_has_no_mention(make_order):
@@ -52,19 +57,21 @@ def test_message_without_user_id_has_no_mention(make_order):
         "R1", [candidate]
     )
 
-    assert message.content[0] == [{"tag": "text", "text": "请关注以下订单："}]
+    assert message.content[0] == [{"tag": "text", "text": "请关注以下相关单号："}]
     assert "离厂时间为空" in message.content[1][0]["text"]
 
 
 def test_formats_all_remaining_rule_messages(make_order):
     formatter = MessageFormatter(mention_user_id="", mention_name="许昊")
     in_transit = make_order(
-        order_no="R2A",
+        order_no="INTERNAL-R2A",
+        related_order_no="R2A",
         actual_arrival_at=datetime(2026, 8, 6),
         box_count=10,
     )
     second_in_transit = make_order(
-        order_no="R2B",
+        order_no="INTERNAL-R2B",
+        related_order_no="R2B",
         actual_arrival_at=datetime(2026, 8, 6, 18, 0),
         box_count=5,
     )
@@ -75,25 +82,34 @@ def test_formats_all_remaining_rule_messages(make_order):
     )
     r2_message = formatter.format("R2", r2)
     assert r2_message.content[1][0]["text"] == "总共 2 个订单，总共 15 箱。"
-    assert r2_message.content[2][0]["text"] == "- R2A｜箱数 10"
-    assert r2_message.content[3][0]["text"] == "- R2B｜箱数 5"
+    assert r2_message.content[2][0]["text"] == "- 相关单号 R2A｜箱数 10"
+    assert r2_message.content[3][0]["text"] == "- 相关单号 R2B｜箱数 5"
 
-    signed = make_order(order_no="R3A", transport_status="已签收", box_count=12)
-    transit = make_order(order_no="R3B", transport_status="运输在途")
+    signed = make_order(
+        order_no="INTERNAL-R3A",
+        related_order_no="R3A",
+        transport_status="已签收",
+        box_count=12,
+    )
+    transit = make_order(
+        order_no="INTERNAL-R3B",
+        related_order_no="R3B",
+        transport_status="运输在途",
+    )
     unsigned = ReminderCandidate("a", "R3", "customer_unsigned", "x", signed)
     pending = ReminderCandidate("b", "R3", "operation_pending", "x", transit)
     r3_message = formatter.format("R3", [unsigned, pending])
     r3_lines = [line[0]["text"] for line in r3_message.content]
     assert "总共 1 个订单，总共 12 箱。" in r3_lines
-    assert "- R3A｜箱数 12" in r3_lines
+    assert "- 相关单号 R3A｜箱数 12" in r3_lines
     assert "提醒内容：共 1 个订单。" in r3_lines
-    assert "- R3B" in r3_lines
+    assert "- 相关单号 R3B" in r3_lines
     assert "请运营人员将状态更新为「已签收」，合同状态为「已完成」。" in r3_lines
 
     delayed = ReminderCandidate("c", "R4", "delay_reason_missing", "x", in_transit)
     r4_lines = [line[0]["text"] for line in formatter.format("R4", [delayed]).content]
     assert "综合统计：共 1 个订单。" in r4_lines
-    assert "- R2A" in r4_lines
+    assert "- 相关单号 R2A" in r4_lines
     assert "请督促相关人员及时填写延误原因，确保延误订单有完整的归因记录。" in r4_lines
 
     with pytest.raises(ValueError, match="没有可格式化"):
@@ -126,7 +142,7 @@ def test_formats_all_rules_in_one_message_with_empty_sections(make_order):
     empty_message = formatter.format_combined(("R1",), [])
     empty_lines = [line[0]["text"] for line in empty_message.content]
     assert empty_lines == [
-        "请关注以下订单：",
+        "请关注以下相关单号：",
         "【R1｜WMS过账时效预警】",
         "无符合条件订单。",
     ]

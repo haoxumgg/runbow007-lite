@@ -12,6 +12,7 @@ HEADERS = [
     "离厂时间(承运商提货时间)",
     "WMS过账时间",
     "预计到达时间",
+    "相关单号",
     "订单号",
     "状态",
     "合同状态",
@@ -33,6 +34,9 @@ def _write_sample(
     blank_departure=False,
     blank_expected_arrival=False,
     omit_expected_arrival_header=False,
+    blank_related_order_no=False,
+    omit_related_order_no_header=False,
+    duplicate_related_order_no=False,
 ):
     workbook = Workbook()
     sheet = workbook.active
@@ -44,6 +48,7 @@ def _write_sample(
         None if blank_departure else datetime(2026, 8, 5, 10, 0),
         datetime(2026, 8, 5, 9, 15),
         None if blank_expected_arrival else datetime(2026, 8, 6, 18, 0),
+        None if blank_related_order_no else "REL-C001",
         "C001",
         "运输在途（已离厂）",
         "签署中",
@@ -59,10 +64,18 @@ def _write_sample(
     if omit_expected_arrival_header:
         del headers[4]
         del row[4]
+    if omit_related_order_no_header:
+        related_position = headers.index("相关单号")
+        del headers[related_position]
+        del row[related_position]
     sheet.append(headers)
     sheet.append(row)
     if duplicate:
         sheet.append(row)
+    if duplicate_related_order_no:
+        second_row = list(row)
+        second_row[headers.index("订单号")] = "C002"
+        sheet.append(second_row)
     workbook.save(path)
 
 
@@ -72,6 +85,7 @@ def test_reads_xlsx_and_maps_actual_headers(tmp_path):
     parsed = read_orders(path, expected_ui_total=1)
     assert parsed.sheet_name == "maintainCompanyOrderPage"
     assert parsed.unique_order_count == 1
+    assert parsed.orders[0].related_order_no == "REL-C001"
     assert parsed.orders[0].carrier_sla_hours == 24
     assert parsed.orders[0].is_delayed is False
 
@@ -89,6 +103,7 @@ def test_reads_real_biff8_xls_export_shape(tmp_path):
         datetime(2026, 8, 5, 10, 0),
         datetime(2026, 8, 5, 9, 15),
         None,
+        "REL-XLS001",
         "XLS001",
         "运输在途（已离厂）",
         "签署中",
@@ -112,6 +127,7 @@ def test_reads_real_biff8_xls_export_shape(tmp_path):
 
     assert parsed.sheet_name == "maintainCompanyOrderPage"
     assert parsed.orders[0].order_no == "XLS001"
+    assert parsed.orders[0].related_order_no == "REL-XLS001"
     assert parsed.orders[0].wms_posted_at == datetime(2026, 8, 5, 9, 15)
     assert parsed.orders[0].expected_arrival_at is None
 
@@ -170,3 +186,31 @@ def test_rejects_duplicate_order_numbers(tmp_path):
     _write_sample(path, duplicate=True)
     with pytest.raises(WorkbookValidationError, match="订单号重复"):
         read_orders(path)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"blank_related_order_no": True},
+        {"omit_related_order_no_header": True},
+    ],
+)
+def test_related_order_number_is_required(tmp_path, options):
+    path = tmp_path / "orders.xlsx"
+    _write_sample(path, **options)
+
+    with pytest.raises(WorkbookValidationError, match="相关单号"):
+        read_orders(path)
+
+
+def test_allows_duplicate_related_order_numbers(tmp_path):
+    path = tmp_path / "orders.xlsx"
+    _write_sample(path, duplicate_related_order_no=True)
+
+    parsed = read_orders(path, expected_ui_total=2)
+
+    assert [order.order_no for order in parsed.orders] == ["C001", "C002"]
+    assert [order.related_order_no for order in parsed.orders] == [
+        "REL-C001",
+        "REL-C001",
+    ]
