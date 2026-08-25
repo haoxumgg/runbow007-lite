@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import os
 
-import keyring
-from keyring.errors import KeyringError
+try:
+    import keyring
+    from keyring.errors import KeyringError
+except ImportError:  # Web-only images use environment variables and omit keyring.
+    keyring = None
+    KeyringError = RuntimeError
 
 TMS_SERVICE = "runbow007:tms"
 FEISHU_SERVICE = "runbow007:feishu"
@@ -59,6 +63,8 @@ def _environment_secret(name: str) -> str | None:
 
 
 def _keyring_get(service: str, account: str) -> str | None:
+    if keyring is None:
+        return None
     try:
         return keyring.get_password(service, account)
     except KeyringError:
@@ -66,6 +72,10 @@ def _keyring_get(service: str, account: str) -> str | None:
 
 
 def _keyring_set(service: str, account: str, secret: str, env_name: str) -> None:
+    if keyring is None:
+        raise CredentialError(
+            f"当前安装未包含系统凭据库；请设置环境变量 {env_name}"
+        )
     try:
         keyring.set_password(service, account, secret)
     except KeyringError as exc:
