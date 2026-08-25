@@ -88,10 +88,40 @@ curl http://127.0.0.1:8080/healthz
 - 服务器能通过 HTTPS 访问 TMS 和飞书开放平台；
 - 安全组仅向可信办公出口 IP 放行上传页端口，默认是 `8080`。
 
+### 仅部署人工上传 Web（推荐）
+
+如果服务器只运行“上传 Excel -> 解析 -> 推送飞书”主流程，使用轻量镜像即可。该镜像不安装 Playwright、Chromium 和系统凭据库：
+
+```bash
+sudo git clone https://github.com/haoxumgg/runbow007-lite.git /opt/runbow007
+cd /opt/runbow007
+sudo docker build -f Dockerfile.web -t runbow007-lite-web:latest .
+```
+
+准备运行目录、非敏感配置和密钥文件后启动：
+
+```bash
+sudo install -d -o 10001 -g 10001 \
+  /opt/runbow007/data /opt/runbow007/downloads /opt/runbow007/logs
+
+sudo docker run -d \
+  --name runbow007-web \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  --env-file /etc/runbow007/secrets.env \
+  -v /opt/runbow007/config.yaml:/app/config.yaml:ro \
+  -v /opt/runbow007/data:/app/data \
+  -v /opt/runbow007/downloads:/app/downloads \
+  -v /opt/runbow007/logs:/app/logs \
+  runbow007-lite-web:latest
+```
+
+服务器更新代码后，执行 `git pull --ff-only` 并重新运行 `docker build -f Dockerfile.web -t runbow007-lite-web:latest .` 即可构建新镜像。密钥文件只通过 `--env-file` 挂载，不会复制进镜像。
+
 ### 手工部署
 
 ```bash
-sudo git clone https://github.com/haoxumgg/runbow007.git /opt/runbow007
+sudo git clone https://github.com/haoxumgg/runbow007-lite.git /opt/runbow007
 cd /opt/runbow007
 sudo ./scripts/deploy-alinux3.sh
 ```

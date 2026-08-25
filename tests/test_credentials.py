@@ -29,6 +29,21 @@ def test_missing_linux_keyring_has_actionable_error(monkeypatch):
         credentials.get_tms_password("user")
 
 
+def test_web_only_install_can_use_environment_without_keyring(monkeypatch):
+    monkeypatch.setattr(credentials, "keyring", None)
+    monkeypatch.setenv(credentials.FEISHU_SECRET_ENV, "feishu-from-env")
+
+    assert credentials.get_feishu_secret("app") == "feishu-from-env"
+
+
+def test_web_only_install_explains_missing_environment(monkeypatch):
+    monkeypatch.setattr(credentials, "keyring", None)
+    monkeypatch.delenv(credentials.FEISHU_SECRET_ENV, raising=False)
+
+    with pytest.raises(credentials.CredentialError, match=credentials.FEISHU_SECRET_ENV):
+        credentials.get_feishu_secret("app")
+
+
 def test_set_secret_explains_linux_environment_fallback(monkeypatch):
     def no_backend(*_args):
         raise NoKeyringError("no backend")
