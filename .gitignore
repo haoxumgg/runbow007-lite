@@ -14,6 +14,7 @@ dist/
 
 config.yaml
 secrets.env
+/secrets.example
 runtime.env
 data/
 downloads/

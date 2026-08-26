@@ -27,12 +27,13 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # 人工上传兜底页面。常驻服务，和一次性的 app 共用镜像、配置、数据库和下载目录，
-  # 但不需要浏览器，所以内存上限给得比 app 小很多。
+  # 人工上传兜底页面。常驻服务，使用不含浏览器的轻量镜像；它和一次性的 app
+  # 共用配置、数据库和下载目录，内存上限也可以更小。
   web:
     build:
       context: .
-    image: runbow007:local
+      dockerfile: Dockerfile.web
+    image: runbow007-lite-web:latest
     init: true
     restart: unless-stopped
     mem_limit: 600m
