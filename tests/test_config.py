@@ -50,6 +50,7 @@ def test_upload_page_ships_with_the_documented_default_account():
     assert (config.web.username, config.web.password) == ("admin", "admin123456")
     assert config.web.port == 8080
     assert config.web.default_rules == ("R1", "R2", "R3", "R4")
+    assert config.rules.max_row_count == 20_000
 
 
 def test_upload_page_credentials_can_come_from_environment(monkeypatch):
@@ -80,3 +81,20 @@ def test_upload_page_settings_are_validated(tmp_path, section, message):
 
     with pytest.raises(ConfigError, match=message):
         AppConfig.load(config_file)
+
+
+def test_max_row_count_cannot_be_negative(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("rules:\n  max_row_count: -1\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="rules.max_row_count"):
+        AppConfig.load(config_file)
+
+
+def test_legacy_max_row_ratio_uses_the_new_fixed_default(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("rules:\n  max_row_ratio: 1.5\n", encoding="utf-8")
+
+    config = AppConfig.load(config_file)
+
+    assert config.rules.max_row_count == 20_000
