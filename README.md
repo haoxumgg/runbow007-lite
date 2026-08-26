@@ -90,33 +90,44 @@ curl http://127.0.0.1:8080/healthz
 
 ### 仅部署人工上传 Web（推荐）
 
-如果服务器只运行“上传 Excel -> 解析 -> 推送飞书”主流程，使用轻量镜像即可。该镜像不安装 Playwright、Chromium 和系统凭据库：
+如果服务器只运行“上传 Excel -> 解析 -> 推送飞书”，使用专用的轻量部署。它不安装 Playwright、Chromium 和系统凭据库，也不会启动自动下载定时任务。
+
+首次安装：
 
 ```bash
-sudo git clone https://github.com/haoxumgg/runbow007-lite.git /opt/runbow007
+git clone https://github.com/haoxumgg/runbow007-lite.git /opt/runbow007
 cd /opt/runbow007
-sudo docker build -f Dockerfile.web -t runbow007-lite-web:latest .
+sudo ./scripts/rebuild-web-alinux3.sh
 ```
 
-准备运行目录、非敏感配置和密钥文件后启动：
+第一次运行会创建 `/opt/runbow007/config.yaml` 和 `/etc/runbow007/secrets.env`，并提示填写配置。人工上传模式只需要以下五项：
+
+```dotenv
+RUNBOW007_FEISHU_APP_ID=
+RUNBOW007_FEISHU_APP_SECRET=
+RUNBOW007_FEISHU_CHAT_ID=
+RUNBOW007_WEB_USERNAME=
+RUNBOW007_WEB_PASSWORD=
+```
+
+填写后再次执行同一条命令：
 
 ```bash
-sudo install -d -o 10001 -g 10001 \
-  /opt/runbow007/data /opt/runbow007/downloads /opt/runbow007/logs
-
-sudo docker run -d \
-  --name runbow007-web \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  --env-file /etc/runbow007/secrets.env \
-  -v /opt/runbow007/config.yaml:/app/config.yaml:ro \
-  -v /opt/runbow007/data:/app/data \
-  -v /opt/runbow007/downloads:/app/downloads \
-  -v /opt/runbow007/logs:/app/logs \
-  runbow007-lite-web:latest
+cd /opt/runbow007
+sudo ./scripts/rebuild-web-alinux3.sh
 ```
 
-服务器更新代码后，执行 `git pull --ff-only` 并重新运行 `docker build -f Dockerfile.web -t runbow007-lite-web:latest .` 即可构建新镜像。密钥文件只通过 `--env-file` 挂载，不会复制进镜像。
+脚本会使用 `Dockerfile.web` 构建最小镜像、替换旧的 `runbow007-web` 容器、启动新服务并检查健康状态。默认监听 `0.0.0.0:18080`；可通过 `RUNBOW007_WEB_PORT` 改端口。由于服务器的 Docker bridge DNS 不可用，该专用 Compose 配置在构建和运行时均复用宿主机网络。
+
+更新版本同样只需：
+
+```bash
+cd /opt/runbow007
+git pull --ff-only
+sudo ./scripts/rebuild-web-alinux3.sh
+```
+
+密钥只通过 `/etc/runbow007/secrets.env` 注入，不会复制进镜像。脚本不会删除数据库、上传归档、日志或其他业务容器。公网访问仍需在当前 ECS 的入方向安全组中放行实际监听端口。
 
 ### 手工部署
 

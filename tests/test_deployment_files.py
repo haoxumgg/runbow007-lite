@@ -25,6 +25,8 @@ def test_compose_serves_the_manual_upload_page_as_a_long_running_service():
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
     web = compose["services"]["web"]
 
+    assert web["build"]["dockerfile"] == "Dockerfile.web"
+    assert web["image"] == "runbow007-lite-web:latest"
     assert web["command"] == ["--config", "/app/config.yaml", "web"]
     assert web["restart"] == "unless-stopped"
     assert web["ports"] == ["${RUNBOW007_WEB_PORT:-8080}:8080"]
@@ -34,6 +36,60 @@ def test_compose_serves_the_manual_upload_page_as_a_long_running_service():
     assert "./downloads:/app/downloads" in volumes
     # 页面不开浏览器，内存上限要给 app 留出余量：整台机器只有 2 GiB。
     assert web["mem_limit"] == "600m"
+
+
+def test_minimal_web_compose_uses_the_small_image_and_host_network():
+    compose = yaml.safe_load((ROOT / "compose.web.yaml").read_text(encoding="utf-8"))
+    web = compose["services"]["web"]
+
+    assert compose["name"] == "runbow007-lite"
+    assert web["build"]["dockerfile"] == "Dockerfile.web"
+    assert web["build"]["network"] == "host"
+    assert web["image"] == "runbow007-lite-web:latest"
+    assert web["network_mode"] == "host"
+    assert "ports" not in web
+    assert web["environment"]["RUNBOW007_WEB_HOST"] == "0.0.0.0"
+    assert web["environment"]["RUNBOW007_WEB_PORT"] == (
+        "${RUNBOW007_WEB_PORT:-18080}"
+    )
+    assert web["command"] == ["--config", "/app/config.yaml", "web"]
+    assert "healthcheck" in web
+
+
+def test_simple_web_rebuild_only_replaces_the_target_web_container():
+    script = (ROOT / "scripts" / "rebuild-web-alinux3.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "compose.web.yaml" in script
+    assert "docker system prune" not in script
+    assert "RUNBOW007_TMS_USERNAME" not in script
+    assert "RUNBOW007_TMS_PASSWORD" not in script
+    for key in (
+        "RUNBOW007_FEISHU_APP_ID",
+        "RUNBOW007_FEISHU_APP_SECRET",
+        "RUNBOW007_FEISHU_CHAT_ID",
+        "RUNBOW007_WEB_USERNAME",
+        "RUNBOW007_WEB_PASSWORD",
+    ):
+        assert key in script
+
+    build_at = script.index('docker compose -f "$compose_file" build web')
+    remove_at = script.index("docker rm -f runbow007-web")
+    start_at = script.index('docker compose -f "$compose_file" up -d')
+    assert build_at < remove_at < start_at
+
+
+def test_secret_template_never_contains_real_credentials():
+    template = (ROOT / "deploy" / "secrets.env.example").read_text(encoding="utf-8")
+    values = dict(
+        line.split("=", 1)
+        for line in template.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    for key, value in values.items():
+        assert value == "", f"示例文件中的 {key} 必须为空"
 
 
 def test_manual_upload_service_is_installed_and_started_by_the_deploy():
