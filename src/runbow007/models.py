@@ -41,6 +41,8 @@ class ParsedWorkbook:
     sheet_name: str
     headers: tuple[str, ...]
     orders: tuple[Order, ...]
+    # 表头之外的非空物理行数；可能因完全重复行自动去重而大于 row_count。
+    raw_row_count: int = 0
 
     @property
     def row_count(self) -> int:

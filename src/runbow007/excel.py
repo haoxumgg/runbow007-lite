@@ -65,21 +65,36 @@ def read_orders(
     sheet_name, headers, rows = _read_rows(source)
     positions = _resolve_positions(headers)
     orders: list[Order] = []
-    seen_order_nos: set[str] = set()
+    seen_rows: dict[str, tuple[tuple[Any, ...], int]] = {}
+    identical_duplicate_count = 0
+    raw_row_count = 0
 
     for row_number, row in enumerate(rows, start=2):
         if not any(not _is_empty(value) for value in row):
             continue
+        raw_row_count += 1
+        raw_row = tuple(row)
         order = _to_order(row, row_number, positions)
-        if order.order_no in seen_order_nos:
+        previous = seen_rows.get(order.order_no)
+        if previous is not None:
+            previous_row, previous_row_number = previous
+            if raw_row == previous_row:
+                identical_duplicate_count += 1
+                continue
             raise WorkbookValidationError(
-                f"订单号重复: {order.order_no}（第 {row_number} 行）"
+                f"订单号重复且两行数据不一致: {order.order_no}"
+                f"（第 {previous_row_number}、{row_number} 行）"
             )
-        seen_order_nos.add(order.order_no)
+        seen_rows[order.order_no] = (raw_row, row_number)
         orders.append(order)
 
     if not orders:
         raise WorkbookValidationError("Excel 没有订单数据")
+    if identical_duplicate_count:
+        logger.warning(
+            "Excel 有 %s 行与前序订单完全重复，已按订单号自动去重",
+            identical_duplicate_count,
+        )
     if expected_ui_total is not None:
         drift = abs(len(orders) - expected_ui_total)
         if drift > total_tolerance:
@@ -97,7 +112,13 @@ def read_orders(
                 total_tolerance,
             )
 
-    return ParsedWorkbook(source, sheet_name, tuple(headers), tuple(orders))
+    return ParsedWorkbook(
+        source,
+        sheet_name,
+        tuple(headers),
+        tuple(orders),
+        raw_row_count,
+    )
 
 
 def _read_rows(path: Path) -> tuple[str, list[str], Iterator[Sequence[Any]]]:

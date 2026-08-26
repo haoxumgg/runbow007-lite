@@ -437,6 +437,20 @@ def test_pipeline_rejects_a_suspiciously_large_export(
         pipeline.process_file(huge, rule_codes=["R4"])
 
 
+def test_pipeline_row_limit_counts_identical_source_rows(
+    tmp_path, app_config, make_order, write_orders_xlsx
+):
+    app_config.rules.max_row_count = 1
+    order = make_order(order_no="DUP001")
+    source = write_orders_xlsx(tmp_path / "duplicate.xlsx", [order, order])
+
+    with pytest.raises(
+        ValueError,
+        match=r"2 个非空数据行（去重后 1 个唯一订单）.*超过单次处理上限 1 行",
+    ):
+        Pipeline(app_config).process_file(source, rule_codes=["R4"])
+
+
 def test_pipeline_allows_growth_below_the_absolute_row_limit(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):

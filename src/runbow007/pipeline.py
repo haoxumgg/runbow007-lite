@@ -72,7 +72,10 @@ class Pipeline:
                 expected_ui_total=expected_ui_total,
                 total_tolerance=self.config.tms.total_tolerance,
             )
-            self._guard_row_count(parsed.row_count)
+            self._guard_row_count(
+                parsed.row_count,
+                raw_row_count=parsed.raw_row_count,
+            )
             self.store.upsert_orders(parsed.orders, source_file=archived, seen_at=now)
             candidates = self.rules.evaluate(parsed.orders, now=now, rule_codes=selected)
             self._log_candidate_counts(candidates, selected)
@@ -141,7 +144,12 @@ class Pipeline:
             )
             raise
 
-    def _guard_row_count(self, row_count: int) -> None:
+    def _guard_row_count(
+        self,
+        row_count: int,
+        *,
+        raw_row_count: int | None = None,
+    ) -> None:
         """Refuse a suspiciously small or oversized export before it touches the database.
 
         TMS 的视图状态是账号级共享且粘性的——默认视图就是"上一次操作的视图"。
@@ -156,9 +164,16 @@ class Pipeline:
         之前拦下来。
         """
         max_count = self.config.rules.max_row_count
-        if max_count > 0 and row_count > max_count:
+        limit_count = raw_row_count or row_count
+        if max_count > 0 and limit_count > max_count:
+            row_summary = f"本轮解析到 {row_count} 行"
+            if limit_count != row_count:
+                row_summary = (
+                    f"本轮文件有 {limit_count} 个非空数据行"
+                    f"（去重后 {row_count} 个唯一订单）"
+                )
             raise ValueError(
-                f"本轮解析到 {row_count} 行，超过单次处理上限 {max_count} 行，已拒绝处理。"
+                f"{row_summary}，超过单次处理上限 {max_count} 行，已拒绝处理。"
                 "请确认附件是正确的 TMS 导出文件；如业务上限调整，可修改 "
                 "rules.max_row_count。"
             )

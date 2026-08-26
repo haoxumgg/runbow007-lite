@@ -31,6 +31,7 @@ def _write_sample(
     path,
     *,
     duplicate=False,
+    conflicting_duplicate=False,
     blank_departure=False,
     blank_expected_arrival=False,
     omit_expected_arrival_header=False,
@@ -70,8 +71,11 @@ def _write_sample(
         del row[related_position]
     sheet.append(headers)
     sheet.append(row)
-    if duplicate:
-        sheet.append(row)
+    if duplicate or conflicting_duplicate:
+        second_row = list(row)
+        if conflicting_duplicate:
+            second_row[headers.index("总箱数")] = 11
+        sheet.append(second_row)
     if duplicate_related_order_no:
         second_row = list(row)
         second_row[headers.index("订单号")] = "C002"
@@ -181,10 +185,25 @@ def test_rejects_ui_total_drift_beyond_tolerance(tmp_path):
         read_orders(path, expected_ui_total=20, total_tolerance=1)
 
 
-def test_rejects_duplicate_order_numbers(tmp_path):
+def test_deduplicates_identical_order_rows(tmp_path):
     path = tmp_path / "orders.xlsx"
     _write_sample(path, duplicate=True)
-    with pytest.raises(WorkbookValidationError, match="订单号重复"):
+
+    parsed = read_orders(path, expected_ui_total=1)
+
+    assert [order.order_no for order in parsed.orders] == ["C001"]
+    assert parsed.row_count == parsed.unique_order_count == 1
+    assert parsed.raw_row_count == 2
+
+
+def test_rejects_conflicting_duplicate_order_numbers(tmp_path):
+    path = tmp_path / "orders.xlsx"
+    _write_sample(path, conflicting_duplicate=True)
+
+    with pytest.raises(
+        WorkbookValidationError,
+        match="订单号重复且两行数据不一致.*第 2、3 行",
+    ):
         read_orders(path)
 
 
