@@ -65,6 +65,11 @@ def test_simple_web_rebuild_only_replaces_the_target_web_container():
     assert "docker system prune" not in script
     assert "RUNBOW007_TMS_USERNAME" not in script
     assert "RUNBOW007_TMS_PASSWORD" not in script
+    assert ".State.Health.Status" in script
+    assert "EUID != 0" in script
+    assert "chown -R -P 10001:10001" in script
+    assert 'legacy_config" != "$project_root/config.yaml"' in script
+    assert "docker compose -f \"$compose_file\" run --rm --no-deps" in script
     for key in (
         "RUNBOW007_FEISHU_APP_ID",
         "RUNBOW007_FEISHU_APP_SECRET",
