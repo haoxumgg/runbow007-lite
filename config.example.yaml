@@ -71,7 +71,7 @@ web:
   # 不想在文件里放明文时，用 `runbow007 web-password` 生成哈希填到这里，优先于 password。
   password_hash: ""
   session_timeout_minutes: 480
-  max_upload_mb: 32
+  max_upload_mb: 64
   # 上传页默认执行全部提醒规则。
   default_rules: [R1, R2, R3, R4]
   # 只有整站走 HTTPS 时才改成 true，否则浏览器会丢掉会话 Cookie。

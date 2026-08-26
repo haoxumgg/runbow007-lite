@@ -84,7 +84,7 @@ class WebConfig:
     # 填写后优先于 password，格式为 pbkdf2_sha256$迭代次数$盐$哈希。
     password_hash: str = ""
     session_timeout_minutes: int = 480
-    max_upload_mb: int = 32
+    max_upload_mb: int = 64
     # 上传页默认执行全部提醒规则。
     default_rules: tuple[str, ...] = ("R1", "R2", "R3", "R4")
     # 只有整站走 HTTPS 时才打开，否则浏览器会直接丢掉会话 Cookie。

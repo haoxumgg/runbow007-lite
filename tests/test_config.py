@@ -49,6 +49,7 @@ def test_upload_page_ships_with_the_documented_default_account():
 
     assert (config.web.username, config.web.password) == ("admin", "admin123456")
     assert config.web.port == 8080
+    assert config.web.max_upload_mb == 64
     assert config.web.default_rules == ("R1", "R2", "R3", "R4")
     assert config.rules.max_row_count == 20_000
 
