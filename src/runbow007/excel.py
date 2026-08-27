@@ -19,6 +19,7 @@ class WorkbookValidationError(ValueError):
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "order_no": ("订单号", "订单单号"),
+    "related_order_no": ("相关单号",),
     "organization": ("所属组织", "执行组织"),
     "carrier": ("承运商名称",),
     "departed_at": ("离厂时间(承运商提货时间)", "离厂时间"),
@@ -38,6 +39,7 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 REQUIRED_FIELDS = {
     "order_no",
+    "related_order_no",
     "departed_at",
     "wms_posted_at",
     "transport_status",
@@ -62,19 +64,19 @@ def read_orders(
 
     sheet_name, headers, rows = _read_rows(source)
     positions = _resolve_positions(headers)
-    orders: list[Order] = []
-    seen: set[str] = set()
+    orders_by_no: dict[str, Order] = {}
+    raw_row_count = 0
 
     for row_number, row in enumerate(rows, start=2):
         if not any(not _is_empty(value) for value in row):
             continue
+        raw_row_count += 1
         order = _to_order(row, row_number, positions)
-        if order.order_no in seen:
-            raise WorkbookValidationError(
-                f"订单号重复: {order.order_no}（第 {row_number} 行）"
-            )
-        seen.add(order.order_no)
-        orders.append(order)
+        # 订单、提醒事件和发送去重都以订单号为键。同一订单在导出中出现多次时，
+        # 不再拒绝整份文件，统一以文件中最后出现的一行为准。
+        orders_by_no[order.order_no] = order
+
+    orders = list(orders_by_no.values())
 
     if not orders:
         raise WorkbookValidationError("Excel 没有订单数据")
@@ -82,20 +84,26 @@ def read_orders(
         drift = abs(len(orders) - expected_ui_total)
         if drift > total_tolerance:
             raise WorkbookValidationError(
-                f"页面显示 {expected_ui_total} 条，但 Excel 有 {len(orders)} 个唯一订单"
+                f"页面显示 {expected_ui_total} 条，但 Excel 有 {len(orders)} 个订单"
             )
         if drift:
             # 读取页面总数和 TMS 生成导出之间订单还在增减，几条的差异属于正常漂移，
             # 不应该让整轮提醒失败。
             logger.warning(
-                "页面显示 %s 条，Excel 有 %s 个唯一订单，相差 %s，在容差 %s 内继续处理",
+                "页面显示 %s 条，Excel 有 %s 个订单，相差 %s，在容差 %s 内继续处理",
                 expected_ui_total,
                 len(orders),
                 drift,
                 total_tolerance,
             )
 
-    return ParsedWorkbook(source, sheet_name, tuple(headers), tuple(orders))
+    return ParsedWorkbook(
+        source,
+        sheet_name,
+        tuple(headers),
+        tuple(orders),
+        raw_row_count,
+    )
 
 
 def _read_rows(path: Path) -> tuple[str, list[str], Iterator[Sequence[Any]]]:
@@ -167,9 +175,13 @@ def _to_order(row: Sequence[Any], row_number: int, positions: dict[str, int | No
     order_no = _text(value("order_no"))
     if not order_no:
         raise WorkbookValidationError(f"第 {row_number} 行订单号为空")
+    related_order_no = _text(value("related_order_no"))
+    if not related_order_no:
+        raise WorkbookValidationError(f"第 {row_number} 行相关单号为空")
     departed_at = _datetime(value("departed_at"), "离厂时间", row_number)
     return Order(
         order_no=order_no,
+        related_order_no=related_order_no,
         organization=_text(value("organization")),
         carrier=_text(value("carrier")),
         departed_at=departed_at,

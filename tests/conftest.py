@@ -20,6 +20,7 @@ HEADERS = [
     "离厂时间(承运商提货时间)",
     "WMS过账时间",
     "预计到达时间",
+    "相关单号",
     "订单号",
     "状态",
     "合同状态",
@@ -39,6 +40,7 @@ def make_order():
     def factory(**overrides):
         values = {
             "order_no": "C001",
+            "related_order_no": "C001",
             "organization": "华东中心仓-上海嘉定",
             "carrier": "华东虹迪",
             "departed_at": datetime(2026, 8, 5, 10, 0),
@@ -56,6 +58,8 @@ def make_order():
             "detail_count": 1,
             "source_row": 2,
         }
+        if "order_no" in overrides and "related_order_no" not in overrides:
+            values["related_order_no"] = overrides["order_no"]
         values.update(overrides)
         return Order(**values)
 
@@ -95,6 +99,7 @@ def write_orders_xlsx():
                     order.departed_at,
                     order.wms_posted_at,
                     order.expected_arrival_at,
+                    order.related_order_no,
                     order.order_no,
                     order.transport_status,
                     order.contract_status,

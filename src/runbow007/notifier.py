@@ -113,9 +113,9 @@ class MessageFormatter:
         if self.mention_user_id:
             return [
                 {"tag": "at", "user_id": self.mention_user_id},
-                {"tag": "text", "text": " 请关注以下订单："},
+                {"tag": "text", "text": " 请关注以下相关单号："},
             ]
-        return [{"tag": "text", "text": "请关注以下订单："}]
+        return [{"tag": "text", "text": "请关注以下相关单号："}]
 
     @staticmethod
     def _text_line(text: str) -> list[dict[str, Any]]:
@@ -129,7 +129,8 @@ class MessageFormatter:
         ]
         lines.extend(
             self._text_line(
-                f"- {item.order.order_no}｜箱数 {item.order.box_count}｜{item.reason}"
+                f"- 相关单号 {item.order.related_order_no}｜"
+                f"箱数 {item.order.box_count}｜{item.reason}"
             )
             for item in candidates
         )
@@ -143,7 +144,9 @@ class MessageFormatter:
             )
         ]
         lines.extend(
-            self._text_line(f"- {item.order.order_no}｜箱数 {item.order.box_count}")
+            self._text_line(
+                f"- 相关单号 {item.order.related_order_no}｜箱数 {item.order.box_count}"
+            )
             for item in candidates
         )
         return lines
@@ -161,13 +164,19 @@ class MessageFormatter:
                 )
             )
             lines.extend(
-                self._text_line(f"- {item.order.order_no}｜箱数 {item.order.box_count}")
+                self._text_line(
+                    f"- 相关单号 {item.order.related_order_no}｜"
+                    f"箱数 {item.order.box_count}"
+                )
                 for item in unsigned
             )
         if pending:
             lines.append(self._text_line("【运营未操作签收】"))
             lines.append(self._text_line(f"提醒内容：共 {len(pending)} 个订单。"))
-            lines.extend(self._text_line(f"- {item.order.order_no}") for item in pending)
+            lines.extend(
+                self._text_line(f"- 相关单号 {item.order.related_order_no}")
+                for item in pending
+            )
             lines.append(
                 self._text_line(
                     "请运营人员将状态更新为「已签收」，合同状态为「已完成」。"
@@ -180,7 +189,10 @@ class MessageFormatter:
             self._text_line(f"综合统计：共 {len(candidates)} 个订单。"),
             self._text_line("明细："),
         ]
-        lines.extend(self._text_line(f"- {item.order.order_no}") for item in candidates)
+        lines.extend(
+            self._text_line(f"- 相关单号 {item.order.related_order_no}")
+            for item in candidates
+        )
         lines.append(
             self._text_line(
                 "请督促相关人员及时填写延误原因，确保延误订单有完整的归因记录。"

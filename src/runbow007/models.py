@@ -9,6 +9,7 @@ from typing import Any
 @dataclass(frozen=True, slots=True)
 class Order:
     order_no: str
+    related_order_no: str
     organization: str
     carrier: str
     departed_at: datetime | None
@@ -40,6 +41,8 @@ class ParsedWorkbook:
     sheet_name: str
     headers: tuple[str, ...]
     orders: tuple[Order, ...]
+    # 表头之外的非空物理行数；同一订单号出现多次时可能大于 row_count。
+    raw_row_count: int = 0
 
     @property
     def row_count(self) -> int:
@@ -67,3 +70,5 @@ class RunResult:
     candidate_count: int
     sent_count: int
     dry_run: bool
+    # 按规则拆开的当前命中数，人工上传页面用它回显"这一轮到底推了什么"。
+    rule_counts: tuple[tuple[str, int], ...] = ()

@@ -119,8 +119,75 @@ def test_pipeline_reports_current_and_new_candidates_separately(
         "当前符合条件共 2 个订单；以下为本轮新增或到期重提醒的 1 个订单，"
         "另有 1 个此前已提醒。"
     ) in lines
-    assert "- D002" in lines
-    assert "- D001" not in lines
+    assert "- 相关单号 D002" in lines
+    assert "- 相关单号 D001" not in lines
+
+
+def test_pipeline_send_all_current_repeats_the_full_current_result(
+    tmp_path, app_config, make_order, write_orders_xlsx, monkeypatch
+):
+    source = write_orders_xlsx(
+        tmp_path / "orders.xlsx",
+        [
+            make_order(
+                order_no=f"INTERNAL-{index}",
+                related_order_no=f"RELATED-{index}",
+                is_delayed=True,
+                delay_reason=None,
+            )
+            for index in range(1, 4)
+        ],
+    )
+    sent_messages = []
+
+    class FakeClient:
+        def __init__(self, config, *, app_secret):
+            pass
+
+        def send(self, message):
+            sent_messages.append(message)
+            return f"om_{len(sent_messages)}"
+
+    monkeypatch.setattr("runbow007.pipeline.get_feishu_secret", lambda app_id: "secret")
+    monkeypatch.setattr("runbow007.pipeline.FeishuClient", FakeClient)
+    pipeline = Pipeline(app_config)
+
+    first = pipeline.process_file(
+        source, rule_codes=["R4"], send=True, send_all_current=True
+    )
+    second = pipeline.process_file(
+        source, rule_codes=["R4"], send=True, send_all_current=True
+    )
+
+    assert first.sent_count == second.sent_count == 3
+    assert len(sent_messages) == 2
+    for message in sent_messages:
+        lines = [line[0]["text"] for line in message.content]
+        assert "此前已提醒" not in "\n".join(lines)
+        for index in range(1, 4):
+            assert f"- 相关单号 RELATED-{index}" in lines
+
+
+def test_pipeline_send_all_current_does_not_send_an_empty_message(
+    tmp_path, app_config, make_order, write_orders_xlsx, monkeypatch
+):
+    source = write_orders_xlsx(
+        tmp_path / "no-match.xlsx",
+        [make_order(order_no="NO-R4", related_order_no="RELATED-NO-R4")],
+    )
+
+    class UnexpectedClient:
+        def __init__(self, config, *, app_secret):
+            raise AssertionError("没有规则命中时不应创建飞书客户端")
+
+    monkeypatch.setattr("runbow007.pipeline.FeishuClient", UnexpectedClient)
+
+    result = Pipeline(app_config).process_file(
+        source, rule_codes=["R4"], send=True, send_all_current=True
+    )
+
+    assert result.candidate_count == 0
+    assert result.sent_count == 0
 
 
 def test_pipeline_force_send_repeats_current_candidates_for_acceptance(
@@ -192,6 +259,13 @@ def test_pipeline_rejects_force_send_in_dry_run(app_config):
     with pytest.raises(ValueError, match="强制发送只能与真实发送同时启用"):
         Pipeline(app_config).process_file(
             "missing.xlsx", rule_codes=["R4"], send=False, force_send=True
+        )
+
+
+def test_pipeline_rejects_send_all_current_in_dry_run(app_config):
+    with pytest.raises(ValueError, match="全量发送只能与真实发送同时启用"):
+        Pipeline(app_config).process_file(
+            "missing.xlsx", rule_codes=["R4"], send_all_current=True
         )
 
 
@@ -291,14 +365,9 @@ def test_pipeline_records_failed_delivery_and_failed_run(
     assert {row["status"] for row in deliveries} == {"failed"}
 
 
-def test_pipeline_rejects_a_suspiciously_small_export(
+def test_pipeline_allows_a_large_drop_in_row_count(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):
-    """人工切换 TMS 视图后自动化会继承，导出条数暴跌但所有校验都通过。
-
-    2026-08-17 17:33 实测：页面总数 38、Excel 行数 38，两者一致，条数容差和 UI
-    比对全部放行，于是照常算规则、照常发飞书。这道闸门要在写库之前拦下来。
-    """
     pipeline = Pipeline(app_config)
     full = write_orders_xlsx(
         tmp_path / "full.xlsx",
@@ -307,50 +376,37 @@ def test_pipeline_rejects_a_suspiciously_small_export(
     pipeline.process_file(full, rule_codes=["R4"])
 
     tiny = write_orders_xlsx(tmp_path / "tiny.xlsx", [make_order(order_no="T001")])
-    with pytest.raises(ValueError, match="疑似 TMS 视图被切换"):
-        pipeline.process_file(tiny, rule_codes=["R4"])
+    result = pipeline.process_file(tiny, rule_codes=["R4"])
 
-    # 拦在写库之前：那一条订单不该进 orders 表。
-    order_nos = {
-        row["order_no"]
-        for row in _rows(app_config.runtime.database_path, "SELECT order_no FROM orders")
-    }
-    assert "T001" not in order_nos
-    statuses = [
-        row["status"]
-        for row in _rows(
-            app_config.runtime.database_path,
-            "SELECT status FROM runs ORDER BY started_at",
-        )
+    assert result.row_count == 1
+    runs = _rows(
+        app_config.runtime.database_path,
+        "SELECT status, row_count FROM runs ORDER BY started_at",
+    )
+    assert [(row["status"], row["row_count"]) for row in runs] == [
+        ("success", 200),
+        ("success", 1),
     ]
-    assert statuses == ["success", "failed"]
 
 
-def test_pipeline_row_count_guard_can_be_disabled(
+def test_pipeline_max_row_count_guard_can_be_disabled(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):
-    app_config.rules.min_row_ratio = 0
-    app_config.rules.max_row_ratio = 0
+    app_config.rules.max_row_count = 0
     pipeline = Pipeline(app_config)
-    full = write_orders_xlsx(
-        tmp_path / "full.xlsx",
-        [make_order(order_no=f"F{index:04d}") for index in range(200)],
+    source = write_orders_xlsx(
+        tmp_path / "large.xlsx",
+        [make_order(order_no=f"F{index:04d}") for index in range(600)],
     )
-    pipeline.process_file(full, rule_codes=["R4"])
 
-    tiny = write_orders_xlsx(tmp_path / "tiny.xlsx", [make_order(order_no="T001")])
-
-    assert pipeline.process_file(tiny, rule_codes=["R4"]).row_count == 1
+    assert pipeline.process_file(source, rule_codes=["R4"]).row_count == 600
 
 
 def test_pipeline_rejects_a_suspiciously_large_export(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):
-    """视图变大同样是错的数据。
-
-    2026-08-17 18:12 实测继承到一个 12644 行的视图（正常 4750），单向闸门放行了，
-    照常算规则、照常发飞书。
-    """
+    """超过固定上限的附件会在写库前被拒绝。"""
+    app_config.rules.max_row_count = 500
     pipeline = Pipeline(app_config)
     normal = write_orders_xlsx(
         tmp_path / "normal.xlsx",
@@ -362,42 +418,65 @@ def test_pipeline_rejects_a_suspiciously_large_export(
         tmp_path / "huge.xlsx",
         [make_order(order_no=f"H{index:04d}") for index in range(600)],
     )
-    with pytest.raises(ValueError, match="超过"):
+    with pytest.raises(ValueError, match="超过单次处理上限 500 行"):
         pipeline.process_file(huge, rule_codes=["R4"])
 
 
-def test_pipeline_row_guard_baseline_survives_one_bad_run(
+def test_pipeline_row_limit_counts_duplicate_source_rows(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):
-    """基线取中位数：一次异常值不能把后续正常运行判成异常。
+    app_config.rules.max_row_count = 1
+    order = make_order(order_no="DUP001")
+    source = write_orders_xlsx(tmp_path / "duplicate.xlsx", [order, order])
 
-    否则 12644 行那轮一旦通过，正常的 4750 行就成了它的 37%，反而会被拒。
-    """
-    app_config.rules.max_row_ratio = 0  # 先让异常大值能落库成为历史
+    with pytest.raises(
+        ValueError,
+        match=r"2 个非空数据行.*超过单次处理上限 1 行",
+    ):
+        Pipeline(app_config).process_file(source, rule_codes=["R4"])
+
+
+def test_pipeline_uses_the_last_duplicate_order_without_duplicate_candidates(
+    tmp_path, app_config, make_order, write_orders_xlsx
+):
+    first = make_order(order_no="DUP001", is_delayed=False)
+    last = make_order(order_no="DUP001", is_delayed=True, delay_reason=None)
+    source = write_orders_xlsx(tmp_path / "duplicate.xlsx", [first, last])
+
+    result = Pipeline(app_config).process_file(source, rule_codes=["R4"])
+
+    assert result.row_count == 1
+    assert result.candidate_count == 1
+    assert result.rule_counts == (("R4", 1),)
+
+
+def test_pipeline_allows_growth_below_the_absolute_row_limit(
+    tmp_path, app_config, make_order, write_orders_xlsx
+):
+    """上限不再按历史行数放大，200 行历史不能把 600 行附件误拦截。"""
+    app_config.rules.max_row_count = 1_000
     pipeline = Pipeline(app_config)
-    for index in range(3):
-        pipeline.process_file(
-            write_orders_xlsx(
-                tmp_path / f"normal{index}.xlsx",
-                [make_order(order_no=f"N{index}{i:04d}") for i in range(200)],
-            ),
-            rule_codes=["R4"],
-        )
     pipeline.process_file(
         write_orders_xlsx(
-            tmp_path / "outlier.xlsx",
-            [make_order(order_no=f"O{i:04d}") for i in range(600)],
+            tmp_path / "normal.xlsx",
+            [make_order(order_no=f"N{i:04d}") for i in range(200)],
         ),
         rule_codes=["R4"],
     )
-
-    app_config.rules.max_row_ratio = 1.5
-    back_to_normal = write_orders_xlsx(
-        tmp_path / "again.xlsx",
-        [make_order(order_no=f"A{i:04d}") for i in range(200)],
+    larger = write_orders_xlsx(
+        tmp_path / "larger.xlsx",
+        [make_order(order_no=f"L{i:04d}") for i in range(600)],
     )
 
-    assert pipeline.process_file(back_to_normal, rule_codes=["R4"]).row_count == 200
+    assert pipeline.process_file(larger, rule_codes=["R4"]).row_count == 600
+
+
+def test_pipeline_accepts_20_000_rows_and_rejects_20_001(app_config):
+    pipeline = Pipeline(app_config)
+
+    pipeline._guard_max_row_count(20_000)
+    with pytest.raises(ValueError, match="超过单次处理上限 20000 行"):
+        pipeline._guard_max_row_count(20_001)
 
 
 def test_pipeline_rejects_unknown_or_disabled_rules(app_config):
