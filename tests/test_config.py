@@ -99,3 +99,12 @@ def test_legacy_max_row_ratio_uses_the_new_fixed_default(tmp_path):
     config = AppConfig.load(config_file)
 
     assert config.rules.max_row_count == 20_000
+
+
+def test_legacy_min_row_ratio_is_ignored(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("rules:\n  min_row_ratio: 1.5\n", encoding="utf-8")
+
+    config = AppConfig.load(config_file)
+
+    assert not hasattr(config.rules, "min_row_ratio")

@@ -365,14 +365,9 @@ def test_pipeline_records_failed_delivery_and_failed_run(
     assert {row["status"] for row in deliveries} == {"failed"}
 
 
-def test_pipeline_rejects_a_suspiciously_small_export(
+def test_pipeline_allows_a_large_drop_in_row_count(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):
-    """人工切换 TMS 视图后自动化会继承，导出条数暴跌但所有校验都通过。
-
-    2026-08-17 17:33 实测：页面总数 38、Excel 行数 38，两者一致，条数容差和 UI
-    比对全部放行，于是照常算规则、照常发飞书。这道闸门要在写库之前拦下来。
-    """
     pipeline = Pipeline(app_config)
     full = write_orders_xlsx(
         tmp_path / "full.xlsx",
@@ -381,40 +376,30 @@ def test_pipeline_rejects_a_suspiciously_small_export(
     pipeline.process_file(full, rule_codes=["R4"])
 
     tiny = write_orders_xlsx(tmp_path / "tiny.xlsx", [make_order(order_no="T001")])
-    with pytest.raises(ValueError, match="疑似 TMS 视图被切换"):
-        pipeline.process_file(tiny, rule_codes=["R4"])
+    result = pipeline.process_file(tiny, rule_codes=["R4"])
 
-    # 拦在写库之前：那一条订单不该进 orders 表。
-    order_nos = {
-        row["order_no"]
-        for row in _rows(app_config.runtime.database_path, "SELECT order_no FROM orders")
-    }
-    assert "T001" not in order_nos
-    statuses = [
-        row["status"]
-        for row in _rows(
-            app_config.runtime.database_path,
-            "SELECT status FROM runs ORDER BY started_at",
-        )
+    assert result.row_count == 1
+    runs = _rows(
+        app_config.runtime.database_path,
+        "SELECT status, row_count FROM runs ORDER BY started_at",
+    )
+    assert [(row["status"], row["row_count"]) for row in runs] == [
+        ("success", 200),
+        ("success", 1),
     ]
-    assert statuses == ["success", "failed"]
 
 
-def test_pipeline_row_count_guard_can_be_disabled(
+def test_pipeline_max_row_count_guard_can_be_disabled(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):
-    app_config.rules.min_row_ratio = 0
     app_config.rules.max_row_count = 0
     pipeline = Pipeline(app_config)
-    full = write_orders_xlsx(
-        tmp_path / "full.xlsx",
-        [make_order(order_no=f"F{index:04d}") for index in range(200)],
+    source = write_orders_xlsx(
+        tmp_path / "large.xlsx",
+        [make_order(order_no=f"F{index:04d}") for index in range(600)],
     )
-    pipeline.process_file(full, rule_codes=["R4"])
 
-    tiny = write_orders_xlsx(tmp_path / "tiny.xlsx", [make_order(order_no="T001")])
-
-    assert pipeline.process_file(tiny, rule_codes=["R4"]).row_count == 1
+    assert pipeline.process_file(source, rule_codes=["R4"]).row_count == 600
 
 
 def test_pipeline_rejects_a_suspiciously_large_export(
@@ -437,7 +422,7 @@ def test_pipeline_rejects_a_suspiciously_large_export(
         pipeline.process_file(huge, rule_codes=["R4"])
 
 
-def test_pipeline_row_limit_counts_identical_source_rows(
+def test_pipeline_row_limit_counts_duplicate_source_rows(
     tmp_path, app_config, make_order, write_orders_xlsx
 ):
     app_config.rules.max_row_count = 1
@@ -446,9 +431,23 @@ def test_pipeline_row_limit_counts_identical_source_rows(
 
     with pytest.raises(
         ValueError,
-        match=r"2 个非空数据行（去重后 1 个唯一订单）.*超过单次处理上限 1 行",
+        match=r"2 个非空数据行.*超过单次处理上限 1 行",
     ):
         Pipeline(app_config).process_file(source, rule_codes=["R4"])
+
+
+def test_pipeline_uses_the_last_duplicate_order_without_duplicate_candidates(
+    tmp_path, app_config, make_order, write_orders_xlsx
+):
+    first = make_order(order_no="DUP001", is_delayed=False)
+    last = make_order(order_no="DUP001", is_delayed=True, delay_reason=None)
+    source = write_orders_xlsx(tmp_path / "duplicate.xlsx", [first, last])
+
+    result = Pipeline(app_config).process_file(source, rule_codes=["R4"])
+
+    assert result.row_count == 1
+    assert result.candidate_count == 1
+    assert result.rule_counts == (("R4", 1),)
 
 
 def test_pipeline_allows_growth_below_the_absolute_row_limit(
@@ -475,9 +474,9 @@ def test_pipeline_allows_growth_below_the_absolute_row_limit(
 def test_pipeline_accepts_20_000_rows_and_rejects_20_001(app_config):
     pipeline = Pipeline(app_config)
 
-    pipeline._guard_row_count(20_000)
+    pipeline._guard_max_row_count(20_000)
     with pytest.raises(ValueError, match="超过单次处理上限 20000 行"):
-        pipeline._guard_row_count(20_001)
+        pipeline._guard_max_row_count(20_001)
 
 
 def test_pipeline_rejects_unknown_or_disabled_rules(app_config):

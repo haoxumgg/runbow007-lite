@@ -8,7 +8,6 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
-from statistics import median
 from zoneinfo import ZoneInfo
 
 from .config import AppConfig
@@ -20,10 +19,6 @@ from .notifier import FeishuClient, MessageFormatter
 from .rules import RuleEngine
 
 logger = logging.getLogger(__name__)
-
-# 行数低于这个量级时，比例判断纯属噪声（真实数据集是四位数）。
-_GUARD_MIN_BASELINE = 100
-
 
 class Pipeline:
     def __init__(self, config: AppConfig) -> None:
@@ -72,10 +67,7 @@ class Pipeline:
                 expected_ui_total=expected_ui_total,
                 total_tolerance=self.config.tms.total_tolerance,
             )
-            self._guard_row_count(
-                parsed.row_count,
-                raw_row_count=parsed.raw_row_count,
-            )
+            self._guard_max_row_count(parsed.raw_row_count)
             self.store.upsert_orders(parsed.orders, source_file=archived, seen_at=now)
             candidates = self.rules.evaluate(parsed.orders, now=now, rule_codes=selected)
             self._log_candidate_counts(candidates, selected)
@@ -144,59 +136,16 @@ class Pipeline:
             )
             raise
 
-    def _guard_row_count(
-        self,
-        row_count: int,
-        *,
-        raw_row_count: int | None = None,
-    ) -> None:
-        """Refuse a suspiciously small or oversized export before it touches the database.
-
-        TMS 的视图状态是账号级共享且粘性的——默认视图就是"上一次操作的视图"。
-        2026-08-17 17:33 实测：人工在浏览器里把视图切到一个只有 38 条的筛选，
-        自动化用同一个账号登录后原样继承，导出了 38 条而不是 4750 条。
-
-        致命之处在于当时所有校验都通过了：页面总数 38、Excel 行数 38，两者一致，
-        条数容差和 UI 比对都查不出任何异常，于是照常算规则、照常发飞书——R1 凭空
-        冒出 36 个候选，R3 从 274 掉到 0。
-
-        所以低值要跟历史做合理性检查；高值则使用固定上限。两道检查都必须在写库
-        之前拦下来。
-        """
+    def _guard_max_row_count(self, row_count: int) -> None:
+        """Refuse an oversized export before it touches the order database."""
         max_count = self.config.rules.max_row_count
-        limit_count = raw_row_count or row_count
-        if max_count > 0 and limit_count > max_count:
-            row_summary = f"本轮解析到 {row_count} 行"
-            if limit_count != row_count:
-                row_summary = (
-                    f"本轮文件有 {limit_count} 个非空数据行"
-                    f"（去重后 {row_count} 个唯一订单）"
-                )
+        if max_count > 0 and row_count > max_count:
             raise ValueError(
-                f"{row_summary}，超过单次处理上限 {max_count} 行，已拒绝处理。"
+                f"本轮文件有 {row_count} 个非空数据行，超过单次处理上限 "
+                f"{max_count} 行，已拒绝处理。"
                 "请确认附件是正确的 TMS 导出文件；如业务上限调整，可修改 "
                 "rules.max_row_count。"
             )
-
-        low = self.config.rules.min_row_ratio
-        if low <= 0:
-            return
-        history = self.store.recent_successful_row_counts()
-        if not history:
-            return
-        baseline = int(median(history))
-        if baseline < _GUARD_MIN_BASELINE:
-            # 数据量本来就很小的时候，比例判断纯属噪声。
-            return
-        if row_count >= baseline * low:
-            return
-        raise ValueError(
-            f"本轮解析到 {row_count} 行，相对最近几次成功运行的中位数 {baseline} 行"
-            f"不足 {low:.0%}（下限 {baseline * low:.0f} 行），"
-            "疑似 TMS 视图被切换成了别的筛选条件，已拒绝处理以免基于错误数据发提醒。"
-            "确认 TMS 上「AI导出数据（勿动）」视图正常后会自动恢复；月初数据重置"
-            "属正常现象，可临时调整 rules.min_row_ratio。"
-        )
 
     def _send_groups(
         self,

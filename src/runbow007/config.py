@@ -97,7 +97,6 @@ class RulesConfig:
     wms_lead_minutes: int = 90
     unresolved_repeat_hour: int = 9
     reopen_grace_hours: int = 12
-    min_row_ratio: float = 0.5
     max_row_count: int = 20_000
 
 
@@ -184,8 +183,6 @@ class AppConfig:
             raise ConfigError("rules.unresolved_repeat_hour 必须在 0 到 23 之间")
         if not 0 <= self.rules.reopen_grace_hours <= 24 * 30:
             raise ConfigError("rules.reopen_grace_hours 必须在 0 到 720 之间")
-        if not 0 <= self.rules.min_row_ratio < 1:
-            raise ConfigError("rules.min_row_ratio 必须在 0 到 1 之间（0 表示关闭）")
         if self.rules.max_row_count < 0:
             raise ConfigError("rules.max_row_count 必须大于等于 0（0 表示关闭）")
         if not 1 <= self.runtime.retain_days <= 3650:

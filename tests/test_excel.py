@@ -185,7 +185,7 @@ def test_rejects_ui_total_drift_beyond_tolerance(tmp_path):
         read_orders(path, expected_ui_total=20, total_tolerance=1)
 
 
-def test_deduplicates_identical_order_rows(tmp_path):
+def test_accepts_identical_duplicate_order_rows(tmp_path):
     path = tmp_path / "orders.xlsx"
     _write_sample(path, duplicate=True)
 
@@ -196,15 +196,16 @@ def test_deduplicates_identical_order_rows(tmp_path):
     assert parsed.raw_row_count == 2
 
 
-def test_rejects_conflicting_duplicate_order_numbers(tmp_path):
+def test_conflicting_duplicate_order_numbers_use_the_last_row(tmp_path):
     path = tmp_path / "orders.xlsx"
     _write_sample(path, conflicting_duplicate=True)
 
-    with pytest.raises(
-        WorkbookValidationError,
-        match="订单号重复且两行数据不一致.*第 2、3 行",
-    ):
-        read_orders(path)
+    parsed = read_orders(path, expected_ui_total=1)
+
+    assert parsed.row_count == parsed.unique_order_count == 1
+    assert parsed.raw_row_count == 2
+    assert parsed.orders[0].box_count == 11
+    assert parsed.orders[0].source_row == 3
 
 
 @pytest.mark.parametrize(

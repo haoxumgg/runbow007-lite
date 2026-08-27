@@ -64,48 +64,33 @@ def read_orders(
 
     sheet_name, headers, rows = _read_rows(source)
     positions = _resolve_positions(headers)
-    orders: list[Order] = []
-    seen_rows: dict[str, tuple[tuple[Any, ...], int]] = {}
-    identical_duplicate_count = 0
+    orders_by_no: dict[str, Order] = {}
     raw_row_count = 0
 
     for row_number, row in enumerate(rows, start=2):
         if not any(not _is_empty(value) for value in row):
             continue
         raw_row_count += 1
-        raw_row = tuple(row)
         order = _to_order(row, row_number, positions)
-        previous = seen_rows.get(order.order_no)
-        if previous is not None:
-            previous_row, previous_row_number = previous
-            if raw_row == previous_row:
-                identical_duplicate_count += 1
-                continue
-            raise WorkbookValidationError(
-                f"订单号重复且两行数据不一致: {order.order_no}"
-                f"（第 {previous_row_number}、{row_number} 行）"
-            )
-        seen_rows[order.order_no] = (raw_row, row_number)
-        orders.append(order)
+        # 订单、提醒事件和发送去重都以订单号为键。同一订单在导出中出现多次时，
+        # 不再拒绝整份文件，统一以文件中最后出现的一行为准。
+        orders_by_no[order.order_no] = order
+
+    orders = list(orders_by_no.values())
 
     if not orders:
         raise WorkbookValidationError("Excel 没有订单数据")
-    if identical_duplicate_count:
-        logger.warning(
-            "Excel 有 %s 行与前序订单完全重复，已按订单号自动去重",
-            identical_duplicate_count,
-        )
     if expected_ui_total is not None:
         drift = abs(len(orders) - expected_ui_total)
         if drift > total_tolerance:
             raise WorkbookValidationError(
-                f"页面显示 {expected_ui_total} 条，但 Excel 有 {len(orders)} 个唯一订单"
+                f"页面显示 {expected_ui_total} 条，但 Excel 有 {len(orders)} 个订单"
             )
         if drift:
             # 读取页面总数和 TMS 生成导出之间订单还在增减，几条的差异属于正常漂移，
             # 不应该让整轮提醒失败。
             logger.warning(
-                "页面显示 %s 条，Excel 有 %s 个唯一订单，相差 %s，在容差 %s 内继续处理",
+                "页面显示 %s 条，Excel 有 %s 个订单，相差 %s，在容差 %s 内继续处理",
                 expected_ui_total,
                 len(orders),
                 drift,
