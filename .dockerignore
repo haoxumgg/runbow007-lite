@@ -15,3 +15,6 @@ downloads
 logs
 browser-profile
 tests
+secrets.example
+deploy/secrets.env.example
+outputs

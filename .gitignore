@@ -14,11 +14,13 @@ dist/
 
 config.yaml
 secrets.env
+/secrets.example
 runtime.env
 data/
 downloads/
 logs/
 browser-profile/
+outputs/
 *.db
 *.sqlite3
 *.xls

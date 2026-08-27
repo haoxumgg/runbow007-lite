@@ -5,7 +5,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_compose_has_no_inbound_ports_and_persists_state():
+def test_compose_batch_job_has_no_inbound_ports_and_persists_state():
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
     app = compose["services"]["app"]
 
@@ -19,6 +19,125 @@ def test_compose_has_no_inbound_ports_and_persists_state():
     assert app["environment"]["RUNBOW007_TMS_DOWNLOAD_TIMEOUT_SECONDS"] == "600"
     # 服务器只有 2 GiB：卡死的 Chromium 必须先撑爆容器，而不是整台机器。
     assert app["mem_limit"] == "1200m"
+
+
+def test_compose_serves_the_manual_upload_page_as_a_long_running_service():
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    web = compose["services"]["web"]
+
+    assert web["build"]["dockerfile"] == "Dockerfile.web"
+    assert web["image"] == "runbow007-lite-web:latest"
+    assert web["command"] == ["--config", "/app/config.yaml", "web"]
+    assert web["restart"] == "unless-stopped"
+    assert web["ports"] == ["${RUNBOW007_WEB_PORT:-8080}:8080"]
+    # 上传页和定时任务共用同一个数据库和下载目录，去重记录才连得上。
+    volumes = set(web["volumes"])
+    assert "./data:/app/data" in volumes
+    assert "./downloads:/app/downloads" in volumes
+    # 页面不开浏览器，内存上限要给 app 留出余量：整台机器只有 2 GiB。
+    assert web["mem_limit"] == "600m"
+
+
+def test_minimal_web_compose_uses_the_small_image_and_host_network():
+    compose = yaml.safe_load((ROOT / "compose.web.yaml").read_text(encoding="utf-8"))
+    web = compose["services"]["web"]
+
+    assert compose["name"] == "runbow007-lite"
+    assert web["build"]["dockerfile"] == "Dockerfile.web"
+    assert web["build"]["network"] == "host"
+    assert web["image"] == "runbow007-lite-web:latest"
+    assert web["network_mode"] == "host"
+    assert "ports" not in web
+    assert web["environment"]["RUNBOW007_WEB_HOST"] == "0.0.0.0"
+    assert web["environment"]["RUNBOW007_WEB_PORT"] == (
+        "${RUNBOW007_WEB_PORT:-18080}"
+    )
+    assert web["command"] == ["--config", "/app/config.yaml", "web"]
+    assert "healthcheck" in web
+
+
+def test_simple_web_rebuild_only_replaces_the_target_web_container():
+    script = (ROOT / "scripts" / "rebuild-web-alinux3.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "compose.web.yaml" in script
+    assert "docker system prune" not in script
+    assert "RUNBOW007_TMS_USERNAME" not in script
+    assert "RUNBOW007_TMS_PASSWORD" not in script
+    assert ".State.Health.Status" in script
+    assert "EUID != 0" in script
+    assert "chown -R -P 10001:10001" in script
+    assert 'legacy_config" != "$project_root/config.yaml"' in script
+    assert "docker compose -f \"$compose_file\" run --rm --no-deps" in script
+    for key in (
+        "RUNBOW007_FEISHU_APP_ID",
+        "RUNBOW007_FEISHU_APP_SECRET",
+        "RUNBOW007_FEISHU_CHAT_ID",
+        "RUNBOW007_WEB_USERNAME",
+        "RUNBOW007_WEB_PASSWORD",
+    ):
+        assert key in script
+
+    build_at = script.index('docker compose -f "$compose_file" build web')
+    remove_at = script.index("docker rm -f runbow007-web")
+    start_at = script.index('docker compose -f "$compose_file" up -d')
+    assert build_at < remove_at < start_at
+
+
+def test_secret_template_never_contains_real_credentials():
+    template = (ROOT / "deploy" / "secrets.env.example").read_text(encoding="utf-8")
+    values = dict(
+        line.split("=", 1)
+        for line in template.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+
+    for key, value in values.items():
+        assert value == "", f"示例文件中的 {key} 必须为空"
+
+
+def test_manual_upload_service_is_installed_and_started_by_the_deploy():
+    unit = (ROOT / "deploy" / "systemd" / "runbow007-web.service").read_text(
+        encoding="utf-8"
+    )
+    deploy_script = (ROOT / "scripts" / "deploy-alinux3.sh").read_text(encoding="utf-8")
+    web_script = (ROOT / "scripts" / "web-alinux3.sh").read_text(encoding="utf-8")
+
+    assert "RemainAfterExit=yes" in unit
+    assert "web-alinux3.sh start" in unit
+    assert "web-alinux3.sh stop" in unit
+    assert "WantedBy=multi-user.target" in unit
+    assert "runbow007-web.service /etc/systemd/system/" in deploy_script
+    assert "systemctl enable runbow007-web.service" in deploy_script
+    # 必须让 systemd 自己拉起来：直接调脚本会让 unit 停在 inactive，
+    # 之后 `systemctl stop` 静默失效，容器还在跑。
+    assert "systemctl restart runbow007-web.service" in deploy_script
+    assert "./scripts/web-alinux3.sh start" not in deploy_script
+    assert "compose up -d web" in web_script
+    assert 'source "$runtime_file"' in web_script
+
+
+def test_tms_download_timers_stay_off_until_switched_on_by_hand():
+    """自动下载经常取不到数据，定时器默认必须是关的。
+
+    只是"不启用"不够：上一次部署留下的 enabled 状态会原样活下来，所以部署脚本
+    要主动 disable，再由 timers-alinux3.sh 手动控制开关。
+    """
+    deploy_script = (ROOT / "scripts" / "deploy-alinux3.sh").read_text(encoding="utf-8")
+    actions_script = (ROOT / "scripts" / "deploy-from-actions.sh").read_text(
+        encoding="utf-8"
+    )
+    toggle = (ROOT / "scripts" / "timers-alinux3.sh").read_text(encoding="utf-8")
+
+    assert (
+        "systemctl disable --now runbow007-hourly.timer runbow007-arrival.timer"
+        in deploy_script
+    )
+    assert "./scripts/timers-alinux3.sh on" in actions_script
+    assert "./scripts/timers-alinux3.sh off" in actions_script
+    assert 'systemctl enable --now "${timers[@]}"' in toggle
+    assert 'systemctl disable --now "${timers[@]}"' in toggle
 
 
 def test_systemd_timers_are_persistent_and_use_shanghai_timezone():
@@ -79,6 +198,7 @@ def test_linux_runtime_defaults_to_dry_run():
     runtime = (ROOT / "deploy" / "runtime.env.example").read_text(encoding="utf-8")
 
     assert "RUNBOW007_ENABLE_SENDING=false" in runtime
+    assert "RUNBOW007_WEB_PORT=8080" in runtime
 
 
 def test_github_deploy_is_manual_and_safe_by_default():
@@ -90,7 +210,8 @@ def test_github_deploy_is_manual_and_safe_by_default():
     inputs = trigger["workflow_dispatch"]["inputs"]
 
     assert set(trigger) == {"workflow_dispatch"}
-    assert inputs["run_smoke_test"]["default"] == "true"
+    # TMS 下载不稳定，部署不该被一次取不到数的演练拖垮。
+    assert inputs["run_smoke_test"]["default"] == "false"
     assert inputs["enable_timers"]["default"] == "false"
     assert inputs["enable_sending"]["default"] == "false"
     assert inputs["feishu_test_rule"]["default"] == "R3"

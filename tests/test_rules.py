@@ -20,6 +20,58 @@ def test_r1_detects_missing_departure_after_wms_timeout(make_order):
     assert candidates[0].event_key == "R1|C001|2026-08-05T09:00:00"
 
 
+def test_all_rule_event_keys_keep_using_internal_order_number(make_order):
+    engine = RuleEngine(RulesConfig())
+    now = datetime(2026, 8, 6, 13, 30)
+    timestamp = datetime(2026, 8, 6, 10, 0)
+    orders = [
+        make_order(
+            order_no="INTERNAL-R1",
+            related_order_no="RELATED-R1",
+            departed_at=None,
+            wms_posted_at=datetime(2026, 8, 6, 10, 0),
+        ),
+        make_order(
+            order_no="INTERNAL-R2",
+            related_order_no="RELATED-R2",
+            actual_arrival_at=timestamp,
+        ),
+        make_order(
+            order_no="INTERNAL-R3",
+            related_order_no="RELATED-R3",
+            transport_status="已签收",
+            contract_status="签署中",
+            actual_arrival_at=timestamp,
+            signed_at=timestamp,
+        ),
+        make_order(
+            order_no="INTERNAL-R4",
+            related_order_no="RELATED-R4",
+            is_delayed=True,
+            delay_reason=None,
+        ),
+    ]
+
+    candidates = engine.evaluate(
+        orders,
+        now=now,
+        rule_codes=["R1", "R2", "R3", "R4"],
+    )
+    keys_by_rule = {
+        candidate.rule_code: candidate.event_key
+        for candidate in candidates
+        if candidate.order.order_no.endswith(candidate.rule_code)
+    }
+
+    assert keys_by_rule == {
+        "R1": "R1|INTERNAL-R1|2026-08-06T10:00:00",
+        "R2": "R2|INTERNAL-R2|2026-08-06",
+        "R3": "R3|unsigned|INTERNAL-R3",
+        "R4": "R4|INTERNAL-R4",
+    }
+    assert all("RELATED" not in event_key for event_key in keys_by_rule.values())
+
+
 def test_r1_uses_strict_timeout_and_requires_missing_departure(make_order):
     engine = RuleEngine(RulesConfig(wms_lead_minutes=90))
     boundary = make_order(

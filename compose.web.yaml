@@ -1,0 +1,40 @@
+name: runbow007-lite
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      # 服务器的 Docker bridge DNS 不可用；构建时复用宿主机网络。
+      network: host
+    image: runbow007-lite-web:latest
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    mem_limit: 600m
+    mem_swappiness: 0
+    env_file:
+      - ${RUNBOW007_SECRETS_FILE:-/etc/runbow007/secrets.env}
+    environment:
+      TZ: Asia/Shanghai
+      RUNBOW007_WEB_HOST: 0.0.0.0
+      RUNBOW007_WEB_PORT: "${RUNBOW007_WEB_PORT:-18080}"
+    command: ["--config", "/app/config.yaml", "web"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os, urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:' +
+          os.environ['RUNBOW007_WEB_PORT'] + '/healthz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

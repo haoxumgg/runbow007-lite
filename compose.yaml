@@ -26,3 +26,29 @@ services:
       - ./browser-profile:/app/browser-profile
     security_opt:
       - no-new-privileges:true
+
+  # 人工上传兜底页面。常驻服务，使用不含浏览器的轻量镜像；它和一次性的 app
+  # 共用配置、数据库和下载目录，内存上限也可以更小。
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: runbow007-lite-web:latest
+    init: true
+    restart: unless-stopped
+    mem_limit: 600m
+    mem_swappiness: 0
+    env_file:
+      - ${RUNBOW007_SECRETS_FILE:-./secrets.env}
+    environment:
+      TZ: Asia/Shanghai
+    command: ["--config", "/app/config.yaml", "web"]
+    ports:
+      - "${RUNBOW007_WEB_PORT:-8080}:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
