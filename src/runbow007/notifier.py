@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import requests
@@ -24,7 +25,7 @@ class FeishuMessage:
 class MessageFormatter:
     TITLES = {
         "R1": "WMS过账时效预警",
-        "R2": "今日签收提醒",
+        "R2": "今日预计到达提醒",
         "R3": "合同签署状态异常提醒",
         "R4": "延迟无原因提醒",
     }
@@ -130,14 +131,14 @@ class MessageFormatter:
         lines.extend(
             self._text_line(
                 f"- 相关单号 {item.order.related_order_no}｜"
-                f"箱数 {item.order.box_count}｜{item.reason}"
+                f"箱数 {_format_box_count(item.order.box_count)}｜{item.reason}"
             )
             for item in candidates
         )
         return lines
 
     def _rule_2(self, candidates: list[ReminderCandidate]) -> list[list[dict[str, Any]]]:
-        total_boxes = sum(item.order.box_count for item in candidates)
+        total_boxes = _sum_box_counts(candidates)
         lines = [
             self._text_line(
                 f"总共 {len(candidates)} 个订单，总共 {total_boxes} 箱。"
@@ -145,7 +146,8 @@ class MessageFormatter:
         ]
         lines.extend(
             self._text_line(
-                f"- 相关单号 {item.order.related_order_no}｜箱数 {item.order.box_count}"
+                f"- 相关单号 {item.order.related_order_no}｜"
+                f"箱数 {_format_box_count(item.order.box_count)}"
             )
             for item in candidates
         )
@@ -156,8 +158,8 @@ class MessageFormatter:
         pending = [item for item in candidates if item.scenario == "operation_pending"]
         lines: list[list[dict[str, Any]]] = []
         if unsigned:
-            total_boxes = sum(item.order.box_count for item in unsigned)
-            lines.append(self._text_line("【客户未电子签】"))
+            total_boxes = _sum_box_counts(unsigned)
+            lines.append(self._text_line("【已签收但合同仍签署中】"))
             lines.append(
                 self._text_line(
                     f"总共 {len(unsigned)} 个订单，总共 {total_boxes} 箱。"
@@ -166,7 +168,7 @@ class MessageFormatter:
             lines.extend(
                 self._text_line(
                     f"- 相关单号 {item.order.related_order_no}｜"
-                    f"箱数 {item.order.box_count}"
+                    f"箱数 {_format_box_count(item.order.box_count)}"
                 )
                 for item in unsigned
             )
@@ -178,9 +180,7 @@ class MessageFormatter:
                 for item in pending
             )
             lines.append(
-                self._text_line(
-                    "请运营人员将状态更新为「已签收」，合同状态为「已完成」。"
-                )
+                self._text_line("请运营人员将状态更新为「已签收」。")
             )
         return lines
 
@@ -199,6 +199,18 @@ class MessageFormatter:
             )
         )
         return lines
+
+
+def _sum_box_counts(candidates: list[ReminderCandidate]) -> str:
+    total = sum(
+        (Decimal(str(item.order.box_count)) for item in candidates),
+        start=Decimal(0),
+    )
+    return _format_box_count(total)
+
+
+def _format_box_count(value: int | float | Decimal) -> str:
+    return format(Decimal(str(value)).normalize(), "f")
 
 
 class FeishuClient:

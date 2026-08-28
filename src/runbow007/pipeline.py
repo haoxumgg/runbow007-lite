@@ -20,6 +20,14 @@ from .rules import RuleEngine
 
 logger = logging.getLogger(__name__)
 
+RULE_REQUIRED_FIELDS: dict[str, frozenset[str]] = {
+    "R1": frozenset({"departed_at", "wms_posted_at"}),
+    "R2": frozenset({"expected_arrival_at", "transport_status"}),
+    "R3": frozenset({"actual_arrival_at", "signed_at", "transport_status", "contract_status"}),
+    "R4": frozenset({"is_delayed", "delay_reason"}),
+}
+
+
 class Pipeline:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -66,6 +74,11 @@ class Pipeline:
                 archived,
                 expected_ui_total=expected_ui_total,
                 total_tolerance=self.config.tms.total_tolerance,
+                required_fields={
+                    field
+                    for rule_code in selected
+                    for field in RULE_REQUIRED_FIELDS[rule_code]
+                },
             )
             self._guard_max_row_count(parsed.raw_row_count)
             self.store.upsert_orders(parsed.orders, source_file=archived, seen_at=now)
@@ -242,26 +255,27 @@ class Pipeline:
 def _log_rule_preconditions(orders: Sequence[Order]) -> None:
     """Log how many rows even reach each rule's precondition.
 
-    R1/R4 每轮都是 0，光看候选统计分不清是"数据本来就没有命中"还是"取数口径把这些
-    单子过滤掉了"。这里把各规则的前置条件单独计数，0 候选时可以直接判断根因。
+    光看候选统计分不清是"数据本来就没有命中"还是"取数口径把这些单子
+    过滤掉了"。这里把规则依赖的时间字段单独计数，0 候选时可以直接判断根因。
     """
     departure_missing = sum(1 for order in orders if order.departed_at is None)
     wms_present = sum(1 for order in orders if order.wms_posted_at is not None)
     delayed = sum(1 for order in orders if order.is_delayed)
-    arrival_equals_signed = sum(
-        1
-        for order in orders
-        if order.actual_arrival_at is not None
-        and order.actual_arrival_at == order.signed_at
+    expected_arrival_present = sum(
+        1 for order in orders if order.expected_arrival_at is not None
     )
+    actual_arrival_present = sum(1 for order in orders if order.actual_arrival_at is not None)
+    signed_present = sum(1 for order in orders if order.signed_at is not None)
     logger.info(
         "规则前置条件统计: 订单总数=%s, 离厂时间为空=%s, 有WMS过账时间=%s, "
-        "是否延迟为是=%s, 实际到达=签收时间=%s",
+        "是否延迟为是=%s, 有预计到达时间=%s, 有实际到达时间=%s, 有签收时间=%s",
         len(orders),
         departure_missing,
         wms_present,
         delayed,
-        arrival_equals_signed,
+        expected_arrival_present,
+        actual_arrival_present,
+        signed_present,
     )
 
 

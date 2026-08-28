@@ -66,8 +66,8 @@ class RuleEngine:
     @staticmethod
     def _rule_2(order: Order, now: datetime) -> ReminderCandidate | None:
         if (
-            order.actual_arrival_at is None
-            or order.actual_arrival_at.date() != now.date()
+            order.expected_arrival_at is None
+            or order.expected_arrival_at.date() != now.date()
             or not _is_in_transit(order.transport_status)
         ):
             return None
@@ -75,35 +75,34 @@ class RuleEngine:
             f"R2|{order.order_no}|{now.date().isoformat()}",
             "R2",
             "arrival_today",
-            "实际到达日期为今天但运输状态仍为在途",
+            "预计到达日期为今天但运输状态仍为在途",
             order,
         )
 
     @staticmethod
     def _rule_3(order: Order) -> ReminderCandidate | None:
         if (
-            order.actual_arrival_at is None
-            or order.signed_at is None
-            or order.actual_arrival_at != order.signed_at
+            order.actual_arrival_at is not None
+            and order.transport_status == "已签收"
+            and order.contract_status == "签署中"
         ):
-            return None
-        if order.transport_status == "已签收" and order.contract_status == "签署中":
             return ReminderCandidate(
                 f"R3|unsigned|{order.order_no}",
                 "R3",
                 "customer_unsigned",
-                "实际到达时间与签收时间一致，订单已签收但合同仍在签署中",
+                "实际到达时间不为空，订单已签收但合同仍在签署中",
                 order,
             )
         if (
-            _is_in_transit(order.transport_status)
+            order.signed_at is not None
+            and order.transport_status == "运输在途（已离厂）"
             and order.contract_status == "已完成"
         ):
             return ReminderCandidate(
                 f"R3|operation_pending|{order.order_no}",
                 "R3",
                 "operation_pending",
-                "实际到达时间与签收时间一致，合同已完成但运输状态仍为在途",
+                "签收时间不为空，合同已完成但运输状态仍为运输在途（已离厂）",
                 order,
             )
         return None

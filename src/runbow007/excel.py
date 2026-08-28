@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import date, datetime, time
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,7 @@ def read_orders(
     *,
     expected_ui_total: int | None = None,
     total_tolerance: int = 0,
+    required_fields: Iterable[str] = (),
 ) -> ParsedWorkbook:
     source = Path(path).resolve()
     if not source.exists():
@@ -63,7 +65,7 @@ def read_orders(
         raise WorkbookValidationError(f"仅支持 .xls/.xlsx: {source.name}")
 
     sheet_name, headers, rows = _read_rows(source)
-    positions = _resolve_positions(headers)
+    positions = _resolve_positions(headers, required_fields=required_fields)
     orders_by_no: dict[str, Order] = {}
     raw_row_count = 0
 
@@ -153,14 +155,20 @@ def _xls_value(cell: Any, datemode: int) -> Any:
     return cell.value
 
 
-def _resolve_positions(headers: Sequence[str]) -> dict[str, int | None]:
+def _resolve_positions(
+    headers: Sequence[str], *, required_fields: Iterable[str] = ()
+) -> dict[str, int | None]:
     normalized = {_header(value): index for index, value in enumerate(headers) if value}
+    required = REQUIRED_FIELDS | set(required_fields)
+    unknown = required - FIELD_ALIASES.keys()
+    if unknown:
+        raise ValueError("未知必需字段: " + ", ".join(sorted(unknown)))
     positions: dict[str, int | None] = {}
     missing: list[str] = []
     for internal, aliases in FIELD_ALIASES.items():
         position = next((normalized[alias] for alias in aliases if alias in normalized), None)
         positions[internal] = position
-        if internal in REQUIRED_FIELDS and position is None:
+        if internal in required and position is None:
             missing.append("/".join(aliases))
     if missing:
         raise WorkbookValidationError("缺少必要表头: " + ", ".join(missing))
@@ -191,7 +199,7 @@ def _to_order(row: Sequence[Any], row_number: int, positions: dict[str, int | No
         ),
         transport_status=_text(value("transport_status")),
         contract_status=_text(value("contract_status")),
-        box_count=_integer(value("box_count"), "总箱数", row_number),
+        box_count=_box_count(value("box_count"), "总箱数", row_number),
         actual_arrival_at=_datetime(value("actual_arrival_at"), "实际到达时间", row_number),
         signed_at=_datetime(value("signed_at"), "签收时间", row_number),
         is_delayed=_boolean(value("is_delayed"), "是否延迟", row_number),
@@ -259,6 +267,22 @@ def _integer(value: Any, field_name: str, row_number: int) -> int:
         raise WorkbookValidationError(
             f"第 {row_number} 行 {field_name} 不是数字: {value}"
         ) from exc
+
+
+def _box_count(value: Any, field_name: str, row_number: int) -> int | float:
+    if _is_empty(value):
+        return 0
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise WorkbookValidationError(
+            f"第 {row_number} 行 {field_name} 不是数字: {value}"
+        ) from exc
+    if not number.is_finite():
+        raise WorkbookValidationError(
+            f"第 {row_number} 行 {field_name} 不是数字: {value}"
+        )
+    return int(number) if number == number.to_integral_value() else float(number)
 
 
 def _optional_integer(value: Any) -> int | None:

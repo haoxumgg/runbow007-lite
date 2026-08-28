@@ -5,6 +5,7 @@ import xlwt
 from openpyxl import Workbook
 
 from runbow007.excel import WorkbookValidationError, read_orders
+from runbow007.pipeline import Pipeline
 
 HEADERS = [
     "所属组织",
@@ -35,9 +36,12 @@ def _write_sample(
     blank_departure=False,
     blank_expected_arrival=False,
     omit_expected_arrival_header=False,
+    omit_actual_arrival_header=False,
+    omit_signed_header=False,
     blank_related_order_no=False,
     omit_related_order_no_header=False,
     duplicate_related_order_no=False,
+    box_count=10,
 ):
     workbook = Workbook()
     sheet = workbook.active
@@ -53,7 +57,7 @@ def _write_sample(
         "C001",
         "运输在途（已离厂）",
         "签署中",
-        10,
+        box_count,
         None,
         None,
         "否",
@@ -62,9 +66,17 @@ def _write_sample(
         None,
         1,
     ]
+    omitted_headers = []
     if omit_expected_arrival_header:
-        del headers[4]
-        del row[4]
+        omitted_headers.append("预计到达时间")
+    if omit_actual_arrival_header:
+        omitted_headers.append("实际到达时间")
+    if omit_signed_header:
+        omitted_headers.append("签收时间")
+    for omitted_header in omitted_headers:
+        position = headers.index(omitted_header)
+        del headers[position]
+        del row[position]
     if omit_related_order_no_header:
         related_position = headers.index("相关单号")
         del headers[related_position]
@@ -92,6 +104,16 @@ def test_reads_xlsx_and_maps_actual_headers(tmp_path):
     assert parsed.orders[0].related_order_no == "REL-C001"
     assert parsed.orders[0].carrier_sla_hours == 24
     assert parsed.orders[0].is_delayed is False
+    assert parsed.orders[0].expected_arrival_at == datetime(2026, 8, 6, 18, 0)
+
+
+def test_preserves_fractional_box_count(tmp_path):
+    path = tmp_path / "orders.xlsx"
+    _write_sample(path, box_count=18.9999)
+
+    parsed = read_orders(path)
+
+    assert parsed.orders[0].box_count == 18.9999
 
 
 def test_reads_real_biff8_xls_export_shape(tmp_path):
@@ -152,13 +174,31 @@ def test_allows_blank_departure_time_for_r1(tmp_path):
         {"omit_expected_arrival_header": True},
     ],
 )
-def test_expected_arrival_is_optional_for_current_rules(tmp_path, options):
+def test_expected_arrival_can_be_absent_when_not_required(tmp_path, options):
     path = tmp_path / "orders.xlsx"
     _write_sample(path, **options)
 
     parsed = read_orders(path, expected_ui_total=1)
 
     assert parsed.orders[0].expected_arrival_at is None
+
+
+@pytest.mark.parametrize(
+    ("rule_code", "options", "missing_header"),
+    [
+        ("R2", {"omit_expected_arrival_header": True}, "预计到达时间"),
+        ("R3", {"omit_actual_arrival_header": True}, "实际到达时间"),
+        ("R3", {"omit_signed_header": True}, "签收时间"),
+    ],
+)
+def test_pipeline_rejects_missing_selected_rule_time_header(
+    tmp_path, app_config, rule_code, options, missing_header
+):
+    path = tmp_path / "orders.xlsx"
+    _write_sample(path, **options)
+
+    with pytest.raises(WorkbookValidationError, match=missing_header):
+        Pipeline(app_config).process_file(path, rule_codes=[rule_code])
 
 
 def test_rejects_ui_total_mismatch(tmp_path):

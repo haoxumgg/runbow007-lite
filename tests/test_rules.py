@@ -34,7 +34,8 @@ def test_all_rule_event_keys_keep_using_internal_order_number(make_order):
         make_order(
             order_no="INTERNAL-R2",
             related_order_no="RELATED-R2",
-            actual_arrival_at=timestamp,
+            expected_arrival_at=timestamp,
+            actual_arrival_at=datetime(2026, 8, 7, 10, 0),
         ),
         make_order(
             order_no="INTERNAL-R3",
@@ -42,7 +43,7 @@ def test_all_rule_event_keys_keep_using_internal_order_number(make_order):
             transport_status="已签收",
             contract_status="签署中",
             actual_arrival_at=timestamp,
-            signed_at=timestamp,
+            signed_at=None,
         ),
         make_order(
             order_no="INTERNAL-R4",
@@ -105,29 +106,36 @@ def test_r1_compares_aware_local_now_with_naive_tms_timestamp(make_order):
     assert len(candidates) == 1
 
 
-def test_r2_uses_actual_arrival_today_and_requires_in_transit_status(make_order):
+def test_r2_uses_expected_arrival_today_and_requires_in_transit_status(make_order):
     engine = RuleEngine(RulesConfig())
     order = make_order(
-        actual_arrival_at=datetime(2026, 8, 6, 22, 0),
-        expected_arrival_at=datetime(2026, 8, 10, 18, 0),
+        expected_arrival_at=datetime(2026, 8, 6, 22, 0),
+        actual_arrival_at=datetime(2026, 8, 10, 18, 0),
         transport_status="运输在途（已离厂）",
     )
     candidates = engine.evaluate(
         [order], now=datetime(2026, 8, 6, 13, 30), rule_codes=["R2"]
     )
     assert len(candidates) == 1
-    assert candidates[0].reason == "实际到达日期为今天但运输状态仍为在途"
+    assert candidates[0].reason == "预计到达日期为今天但运输状态仍为在途"
 
 
-def test_r2_rejects_missing_other_day_or_non_transit_actual_arrival(make_order):
+def test_r2_rejects_missing_other_day_or_non_transit_expected_arrival(make_order):
     engine = RuleEngine(RulesConfig())
-    missing = make_order(order_no="C001", actual_arrival_at=None)
+    actual_today = datetime(2026, 8, 6, 12, 0)
+    missing = make_order(
+        order_no="C001",
+        expected_arrival_at=None,
+        actual_arrival_at=actual_today,
+    )
     other_day = make_order(
-        order_no="C002", actual_arrival_at=datetime(2026, 8, 5, 23, 59)
+        order_no="C002",
+        expected_arrival_at=datetime(2026, 8, 5, 23, 59),
+        actual_arrival_at=actual_today,
     )
     signed = make_order(
         order_no="C003",
-        actual_arrival_at=datetime(2026, 8, 6, 0, 1),
+        expected_arrival_at=datetime(2026, 8, 6, 0, 1),
         transport_status="已签收",
     )
 
@@ -140,66 +148,101 @@ def test_r2_rejects_missing_other_day_or_non_transit_actual_arrival(make_order):
 
 def test_r3_detects_both_scenarios(make_order):
     engine = RuleEngine(RulesConfig())
-    arrival_and_signed = datetime(2026, 8, 5, 18, 30)
+    timestamp = datetime(2026, 8, 5, 18, 30)
     unsigned = make_order(
         transport_status="已签收",
         contract_status="签署中",
-        actual_arrival_at=arrival_and_signed,
-        signed_at=arrival_and_signed,
+        actual_arrival_at=timestamp,
+        signed_at=None,
     )
     pending = make_order(
         order_no="C002",
         transport_status="运输在途（已离厂）",
         contract_status="已完成",
-        actual_arrival_at=arrival_and_signed,
-        signed_at=arrival_and_signed,
+        actual_arrival_at=None,
+        signed_at=timestamp,
     )
     candidates = engine.evaluate(
         [unsigned, pending], now=datetime(2026, 8, 6), rule_codes=["R3"]
     )
     assert {item.scenario for item in candidates} == {"customer_unsigned", "operation_pending"}
+    assert {item.reason for item in candidates} == {
+        "实际到达时间不为空，订单已签收但合同仍在签署中",
+        "签收时间不为空，合同已完成但运输状态仍为运输在途（已离厂）",
+    }
 
 
-def test_r3_requires_present_equal_times_and_known_statuses(make_order):
+def test_r3_requires_each_scenarios_own_time_and_exact_field_values(make_order):
     engine = RuleEngine(RulesConfig())
-    missing_times = make_order(
-        order_no="C001", transport_status="已签收", contract_status="签署中"
-    )
-    unequal_times = make_order(
-        order_no="C002",
+    missing_actual_arrival = make_order(
+        order_no="C001",
         transport_status="已签收",
         contract_status="签署中",
-        actual_arrival_at=datetime(2026, 8, 5, 18, 30),
-        signed_at=datetime(2026, 8, 5, 18, 31),
+        actual_arrival_at=None,
+        signed_at=datetime(2026, 8, 5, 18, 30),
     )
-    unknown_transit_status = make_order(
-        order_no="C003",
-        transport_status="运输中",
+    missing_signed = make_order(
+        order_no="C002",
+        transport_status="运输在途（已离厂）",
         contract_status="已完成",
         actual_arrival_at=datetime(2026, 8, 5, 18, 30),
+        signed_at=None,
+    )
+    legacy_transit_status = make_order(
+        order_no="C003",
+        transport_status="运输在途",
+        contract_status="已完成",
+        signed_at=datetime(2026, 8, 5, 18, 30),
+    )
+    wrong_unsigned_status = make_order(
+        order_no="C004",
+        transport_status="运输在途（已离厂）",
+        contract_status="签署中",
+        actual_arrival_at=datetime(2026, 8, 5, 18, 30),
+        signed_at=None,
+    )
+    wrong_unsigned_contract = make_order(
+        order_no="C005",
+        transport_status="已签收",
+        contract_status="已完成",
+        actual_arrival_at=datetime(2026, 8, 5, 18, 30),
+        signed_at=None,
+    )
+    wrong_pending_contract = make_order(
+        order_no="C006",
+        transport_status="运输在途（已离厂）",
+        contract_status="签署中",
+        actual_arrival_at=None,
         signed_at=datetime(2026, 8, 5, 18, 30),
     )
 
     assert not engine.evaluate(
-        [missing_times, unequal_times, unknown_transit_status],
+        [
+            missing_actual_arrival,
+            missing_signed,
+            legacy_transit_status,
+            wrong_unsigned_status,
+            wrong_unsigned_contract,
+            wrong_pending_contract,
+        ],
         now=datetime(2026, 8, 6),
         rule_codes=["R3"],
     )
 
 
-def test_r2_and_r3_accept_legacy_in_transit_alias(make_order):
+def test_r2_accepts_legacy_in_transit_alias_but_r3_requires_departed_status(make_order):
     engine = RuleEngine(RulesConfig())
     timestamp = datetime(2026, 8, 6, 18, 30)
     r2_order = make_order(
         order_no="R2-LEGACY",
         transport_status="运输在途",
-        actual_arrival_at=timestamp,
+        expected_arrival_at=timestamp,
     )
     r3_order = make_order(
         order_no="R3-LEGACY",
         transport_status="运输在途",
         contract_status="已完成",
-        actual_arrival_at=timestamp,
+        expected_arrival_at=timestamp,
         signed_at=timestamp,
     )
 
@@ -212,7 +255,6 @@ def test_r2_and_r3_accept_legacy_in_transit_alias(make_order):
     assert {(item.rule_code, item.order.order_no) for item in candidates} == {
         ("R2", "R2-LEGACY"),
         ("R2", "R3-LEGACY"),
-        ("R3", "R3-LEGACY"),
     }
 
 

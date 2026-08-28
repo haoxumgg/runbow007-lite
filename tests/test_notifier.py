@@ -66,13 +66,15 @@ def test_formats_all_remaining_rule_messages(make_order):
     in_transit = make_order(
         order_no="INTERNAL-R2A",
         related_order_no="R2A",
-        actual_arrival_at=datetime(2026, 8, 6),
+        expected_arrival_at=datetime(2026, 8, 6),
+        actual_arrival_at=None,
         box_count=10,
     )
     second_in_transit = make_order(
         order_no="INTERNAL-R2B",
         related_order_no="R2B",
-        actual_arrival_at=datetime(2026, 8, 6, 18, 0),
+        expected_arrival_at=datetime(2026, 8, 6, 18, 0),
+        actual_arrival_at=datetime(2026, 8, 10, 18, 0),
         box_count=5,
     )
     r2 = RuleEngine(RulesConfig()).evaluate(
@@ -89,22 +91,30 @@ def test_formats_all_remaining_rule_messages(make_order):
         order_no="INTERNAL-R3A",
         related_order_no="R3A",
         transport_status="已签收",
+        contract_status="签署中",
+        actual_arrival_at=datetime(2026, 8, 5, 18, 0),
+        signed_at=None,
         box_count=12,
     )
     transit = make_order(
         order_no="INTERNAL-R3B",
         related_order_no="R3B",
-        transport_status="运输在途",
+        transport_status="运输在途（已离厂）",
+        contract_status="已完成",
+        actual_arrival_at=None,
+        signed_at=datetime(2026, 8, 5, 18, 0),
     )
-    unsigned = ReminderCandidate("a", "R3", "customer_unsigned", "x", signed)
-    pending = ReminderCandidate("b", "R3", "operation_pending", "x", transit)
-    r3_message = formatter.format("R3", [unsigned, pending])
+    r3_candidates = RuleEngine(RulesConfig()).evaluate(
+        [signed, transit], now=datetime(2026, 8, 6), rule_codes=["R3"]
+    )
+    r3_message = formatter.format("R3", r3_candidates)
     r3_lines = [line[0]["text"] for line in r3_message.content]
+    assert "【已签收但合同仍签署中】" in r3_lines
     assert "总共 1 个订单，总共 12 箱。" in r3_lines
     assert "- 相关单号 R3A｜箱数 12" in r3_lines
     assert "提醒内容：共 1 个订单。" in r3_lines
     assert "- 相关单号 R3B" in r3_lines
-    assert "请运营人员将状态更新为「已签收」，合同状态为「已完成」。" in r3_lines
+    assert "请运营人员将状态更新为「已签收」。" in r3_lines
 
     delayed = ReminderCandidate("c", "R4", "delay_reason_missing", "x", in_transit)
     r4_lines = [line[0]["text"] for line in formatter.format("R4", [delayed]).content]
@@ -116,6 +126,34 @@ def test_formats_all_remaining_rule_messages(make_order):
         formatter.format("R1", [])
     with pytest.raises(ValueError, match="未知规则"):
         formatter.format("RX", [delayed])
+
+
+def test_r2_preserves_fractional_box_counts_in_total_and_details(make_order):
+    formatter = MessageFormatter(mention_user_id="", mention_name="许昊")
+    candidates = RuleEngine(RulesConfig()).evaluate(
+        [
+            make_order(
+                order_no="R2-INTEGER",
+                related_order_no="R2-INTEGER",
+                expected_arrival_at=datetime(2026, 8, 28),
+                box_count=823,
+            ),
+            make_order(
+                order_no="R2-FRACTIONAL",
+                related_order_no="R2-FRACTIONAL",
+                expected_arrival_at=datetime(2026, 8, 28),
+                box_count=18.9999,
+            ),
+        ],
+        now=datetime(2026, 8, 28),
+        rule_codes=["R2"],
+    )
+
+    message = formatter.format("R2", candidates)
+
+    assert message.content[1][0]["text"] == "总共 2 个订单，总共 841.9999 箱。"
+    assert message.content[2][0]["text"].endswith("箱数 823")
+    assert message.content[3][0]["text"].endswith("箱数 18.9999")
 
 
 def test_formats_all_rules_in_one_message_with_empty_sections(make_order):
@@ -133,7 +171,7 @@ def test_formats_all_rules_in_one_message_with_empty_sections(make_order):
     assert message.title == "R1–R4订单提醒汇总"
     assert lines.count("无符合条件订单。") == 2
     assert "【R1｜WMS过账时效预警】" in lines
-    assert "【R2｜今日签收提醒】" in lines
+    assert "【R2｜今日预计到达提醒】" in lines
     assert "【R3｜合同签署状态异常提醒】" in lines
     assert "【R4｜延迟无原因提醒】" in lines
     assert "总共 1 个订单，总共 8 箱。" in lines

@@ -40,7 +40,7 @@ SESSION_COOKIE = "runbow007_session"
 ALL_RULES: tuple[str, ...] = ("R1", "R2", "R3", "R4")
 RULE_LABELS = {
     "R1": "WMS 过账",
-    "R2": "今日签收",
+    "R2": "今日预计到达",
     "R3": "合同签署",
     "R4": "延迟原因",
 }

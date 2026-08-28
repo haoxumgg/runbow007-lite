@@ -17,7 +17,7 @@ class Order:
     expected_arrival_at: datetime | None
     transport_status: str
     contract_status: str
-    box_count: int
+    box_count: int | float
     actual_arrival_at: datetime | None
     signed_at: datetime | None
     is_delayed: bool
